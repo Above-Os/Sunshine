@@ -119,7 +119,7 @@ jobs:
         uses: LizardByte/setup-release-action@v2024.919.143601
         with:
           dotnet: ${{ needs.check_dockerfiles.outputs.dotnet }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GH_TOKEN }}
 
   docker:
     needs: [check_dockerfiles, setup_release]
