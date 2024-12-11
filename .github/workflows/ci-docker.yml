@@ -179,6 +179,7 @@ jobs:
           # setup the tags
           REPOSITORY=${{ github.repository }}
           BASE_TAG=$(echo $REPOSITORY | tr '[:upper:]' '[:lower:]')
+          BASE_TAG='beclab/sunshine'
 
           TAGS="${BASE_TAG}:${COMMIT:0:7}${{ matrix.tag }},ghcr.io/${BASE_TAG}:${COMMIT:0:7}${{ matrix.tag }}"
 
