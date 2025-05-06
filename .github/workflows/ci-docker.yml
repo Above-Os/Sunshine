@@ -145,6 +145,7 @@ jobs:
             echo "This is a PUSH event"
             BRANCH=${{ github.ref_name }}
             CLONE_URL=${{ github.event.repository.clone_url }}
+            COMMIT=${GITHUB_SHA}
           else
             echo "This is a PULL REQUEST event"
             CLONE_URL=${{ github.event.pull_request.head.repo.clone_url }}
