@@ -76,7 +76,6 @@ using asio::ip::tcp;
 using asio::ip::udp;
 
 using namespace std::literals;
-#define DS_EFFECT_PAYLOAD_SIZE 10
 
 namespace stream {
 
