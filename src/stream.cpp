@@ -76,6 +76,7 @@ using asio::ip::tcp;
 using asio::ip::udp;
 
 using namespace std::literals;
+#define DS_EFFECT_PAYLOAD_SIZE 10
 
 namespace stream {
 
@@ -83,6 +84,7 @@ namespace stream {
     video,  ///< Video
     audio  ///< Audio
   };
+
 
 #pragma pack(push, 1)
 
@@ -855,23 +857,23 @@ namespace stream {
 
       payload = encode_control(session, util::view(plaintext), encrypted_payload);
     } else 
-    // if (msg.type == platf::gamepad_feedback_e::set_adaptive_triggers) {
-    //   control_adaptive_triggers_t plaintext;
-    //   plaintext.header.type = packetTypes[IDX_SET_ADAPTIVE_TRIGGERS];
-    //   plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+    if (msg.type == platf::gamepad_feedback_e::set_adaptive_triggers) {
+      control_adaptive_triggers_t plaintext;
+      plaintext.header.type = packetTypes[IDX_SET_ADAPTIVE_TRIGGERS];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
 
-    //   plaintext.id = util::endian::little(msg.id);
-    //   plaintext.event_flags = msg.data.adaptive_triggers.event_flags;
-    //   plaintext.type_left = msg.data.adaptive_triggers.type_left;
-    //   std::ranges::copy(msg.data.adaptive_triggers.left, plaintext.left);
-    //   plaintext.type_right = msg.data.adaptive_triggers.type_right;
-    //   std::ranges::copy(msg.data.adaptive_triggers.right, plaintext.right);
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.event_flags = msg.data.adaptive_triggers.event_flags;
+      plaintext.type_left = msg.data.adaptive_triggers.type_left;
+      std::ranges::copy(msg.data.adaptive_triggers.left, plaintext.left);
+      plaintext.type_right = msg.data.adaptive_triggers.type_right;
+      std::ranges::copy(msg.data.adaptive_triggers.right, plaintext.right);
 
-    //   std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
-    //     encrypted_payload;
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
 
-    //   payload = encode_control(session, util::view(plaintext), encrypted_payload);
-    // } else 
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else 
     
     {
       BOOST_LOG(error) << "Unknown gamepad feedback message type"sv;
