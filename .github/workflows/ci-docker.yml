@@ -134,14 +134,12 @@ jobs:
 
       - name: Prepare
         id: prepare
-        env:
-          NV: ${{ needs.setup_release.outputs.release_tag }}
         run: |
           # get branch name
           BRANCH=${GITHUB_HEAD_REF}
 
-          RELEASE=${{ needs.setup_release.outputs.publish_release }}
-          COMMIT=${{ needs.setup_release.outputs.release_commit }}
+          RELEASE=true
+          COMMIT=${{github.event.pull_request.head.sha}}
 
           if [ -z "$BRANCH" ]; then
             echo "This is a PUSH event"
@@ -240,7 +238,6 @@ jobs:
             Docker-buildx${{ matrix.tag }}-
 
       - name: Log in to Docker Hub
-        if: needs.setup_release.outputs.publish_release == 'true'  # PRs do not have access to secrets
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -252,15 +249,14 @@ jobs:
         with:
           context: ./
           file: ${{ matrix.dockerfile }}
-          push: ${{ needs.setup_release.outputs.publish_release }}
+          push: true
           platforms: ${{ steps.prepare.outputs.platforms }}
           build-args: |
             BRANCH=${{ steps.prepare.outputs.branch }}
             BUILD_DATE=${{ steps.prepare.outputs.build_date }}
-            BUILD_VERSION=${{ needs.setup_release.outputs.release_tag }}
-            COMMIT=${{ needs.setup_release.outputs.release_commit }}
+            BUILD_VERSION=master
+            COMMIT=${{github.event.pull_request.head.sha}}
             CLONE_URL=${{ steps.prepare.outputs.clone_url }}
-            RELEASE=${{ needs.setup_release.outputs.publish_release }}
           tags: ${{ steps.prepare.outputs.tags }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
