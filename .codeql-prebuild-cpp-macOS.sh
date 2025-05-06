@@ -1,9 +1,12 @@
 # install dependencies for C++ analysis
 set -e
 
+# setup homebrew for x86_64
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+eval "$(/usr/local/bin/brew shellenv)"
+
 # install dependencies
 dependencies=(
-  "boost"
   "cmake"
   "miniupnpc"
   "ninja"
