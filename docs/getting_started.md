@@ -30,7 +30,9 @@ See [Docker](../DOCKER_README.md) for more information.
 
 CUDA is used for NVFBC capture.
 
-@tip{See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference Compute Capability to your GPU.}
+@tip{See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference Compute Capability to your GPU.
+The table below applies to packages provided by LizardByte. If you use an official LizardByte package then you do not
+need to install CUDA.}
 
 <table>
     <caption>CUDA Compatibility</caption>
@@ -55,7 +57,7 @@ CUDA is used for NVFBC capture.
     <tr>
         <td rowspan="1">12.0.0</td>
         <td rowspan="2">525.60.13</td>
-        <td rowspan="4">50;52;60;61;62;70;72;75;80;86;87;89;90</td>
+        <td rowspan="5">50;52;60;61;62;70;72;75;80;86;87;89;90</td>
         <td>sunshine-debian-bookworm-{arch}.deb</td>
     </tr>
     <tr>
@@ -68,7 +70,12 @@ CUDA is used for NVFBC capture.
         <td>sunshine_{arch}.flatpak</td>
     </tr>
     <tr>
-        <td>Sunshine (copr)</td>
+        <td>Sunshine (copr - Fedora 40/41)</td>
+    </tr>
+    <tr>
+        <td rowspan="1">12.8.1</td>
+        <td rowspan="1">570.124.06</td>
+        <td>Sunshine (copr - Fedora 42)</td>
     </tr>
 </table>
 
@@ -271,42 +278,6 @@ brew uninstall sunshine
 
 @tip{For beta you can replace `sunshine` with `sunshine-beta` in the above commands.}
 
-#### Portfile
-This package requires that you have [MacPorts](https://www.macports.org/install.php) installed.
-
-##### Install
-1. Update the Macports sources.
-   ```bash
-   sudo nano /opt/local/etc/macports/sources.conf
-   ```
-
-   Add this line, replacing your username, below the line that starts with `rsync`.
-   ```bash
-   file:///Users/<username>/ports
-   ```
-
-   `Ctrl+x`, then `Y` to exit and save changes.
-
-2. Download and install by running the following commands.
-   ```bash
-   mkdir -p ~/ports/multimedia/sunshine
-   cd ~/ports/multimedia/sunshine
-   curl -OL https://github.com/LizardByte/Sunshine/releases/latest/download/Portfile
-   cd ~/ports
-   portindex
-   sudo port install sunshine
-   ```
-
-##### Install service (optional)
-```bash
-sudo port load sunshine
-```
-
-##### Uninstall
-```bash
-sudo port uninstall sunshine
-```
-
 ### Windows
 
 #### Installer (recommended)
@@ -370,8 +341,6 @@ recommended for most users. No support will be provided!}
    cd /d {path to extracted directory}
    scripts/uninstall-service.bat
    ```
-
-To uninstall, delete the extracted directory which contains the `sunshine.exe` file.
 
 ## Initial Setup
 After installation, some initial setup is required.
@@ -456,7 +425,7 @@ ssh <user>@<ip_address> 'startx &; export DISPLAY=:0; sunshine'
 
 @tip{You could also utilize the `~/.bash_profile` or `~/.bashrc` files to set up the `DISPLAY` variable.}
 
-@seealso{ See [Remote SSH Headless Setup](md_docs_2guides.html#remote-ssh-headless-setup)
+@seealso{ See [Remote SSH Headless Setup](https://app.lizardbyte.dev/2023-09-14-remote-ssh-headless-sunshine-setup)
 on how to set up a headless streaming server without autologin and dummy plugs (X11 + NVidia GPUs)}
 
 ### Configuration
