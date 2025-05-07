@@ -221,6 +221,8 @@ jobs:
           echo "no_cache_filters=${NO_CACHE_FILTERS}" >> $GITHUB_OUTPUT
           echo "platforms=${PLATFORMS}" >> $GITHUB_OUTPUT
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+
 
       - name: Set Up QEMU
         uses: docker/setup-qemu-action@v3
@@ -254,8 +256,8 @@ jobs:
           build-args: |
             BRANCH=${{ steps.prepare.outputs.branch }}
             BUILD_DATE=${{ steps.prepare.outputs.build_date }}
-            BUILD_VERSION=master
-            COMMIT=${{github.event.pull_request.head.sha}}
+            BUILD_VERSION=
+            COMMIT=${{ steps.prepare.outputs.commit }}
             CLONE_URL=${{ steps.prepare.outputs.clone_url }}
           tags: ${{ steps.prepare.outputs.tags }}
           cache-from: type=local,src=/tmp/.buildx-cache
