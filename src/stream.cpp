@@ -76,6 +76,7 @@ using asio::ip::tcp;
 using asio::ip::udp;
 
 using namespace std::literals;
+#define DS_EFFECT_PAYLOAD_SIZE 10
 
 namespace stream {
 
@@ -83,6 +84,7 @@ namespace stream {
     video,  ///< Video
     audio  ///< Audio
   };
+
 
 #pragma pack(push, 1)
 

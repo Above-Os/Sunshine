@@ -4,16 +4,6 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    branches:
-      - master
-    types:
-      - opened
-      - synchronize
-      - reopened
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 concurrency:
@@ -250,6 +240,7 @@ jobs:
           path: artifacts/
           if-no-files-found: error
 
+<<<<<<< HEAD
       - name: Create/Update GitHub Release
         if: needs.setup_release.outputs.publish_release == 'true'
         uses: LizardByte/create-release-action@v2025.426.1549
@@ -261,6 +252,19 @@ jobs:
           prerelease: true
           tag: ${{ needs.setup_release.outputs.release_tag }}
           token: ${{ secrets.GH_BOT_TOKEN }}
+=======
+      # - name: Create/Update GitHub Release
+      #   if: needs.setup_release.outputs.publish_release == 'true'
+      #   uses: LizardByte/create-release-action@v2025.426.1549
+      #   with:
+      #     allowUpdates: true
+      #     body: ${{ needs.setup_release.outputs.release_body }}
+      #     generateReleaseNotes: ${{ needs.setup_release.outputs.release_generate_release_notes }}
+      #     name: ${{ needs.setup_release.outputs.release_tag }}
+      #     prerelease: true
+      #     tag: ${{ needs.setup_release.outputs.release_tag }}
+      #     token: ${{ secrets.GH_BOT_TOKEN }}
+>>>>>>> 0dea6ba1c46595d4e40448f2fc936af070147abc
 
   build_linux:
     name: Linux ${{ matrix.type }}
