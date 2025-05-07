@@ -856,8 +856,7 @@ namespace stream {
         encrypted_payload;
 
       payload = encode_control(session, util::view(plaintext), encrypted_payload);
-    } else 
-    if (msg.type == platf::gamepad_feedback_e::set_adaptive_triggers) {
+    } else if (msg.type == platf::gamepad_feedback_e::set_adaptive_triggers) {
       control_adaptive_triggers_t plaintext;
       plaintext.header.type = packetTypes[IDX_SET_ADAPTIVE_TRIGGERS];
       plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
@@ -873,9 +872,7 @@ namespace stream {
         encrypted_payload;
 
       payload = encode_control(session, util::view(plaintext), encrypted_payload);
-    } else 
-    
-    {
+    } else {
       BOOST_LOG(error) << "Unknown gamepad feedback message type"sv;
       return -1;
     }

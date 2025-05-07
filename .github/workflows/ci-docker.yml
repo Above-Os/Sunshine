@@ -22,11 +22,10 @@ name: CI Docker
 permissions:
   contents: read
 
-
 on:
   pull_request:
     branches:
-      - master
+      - sync/main
     types:
       - opened
       - synchronize
