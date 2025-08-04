@@ -4,6 +4,7 @@ permissions:
   contents: read
 
 on:
+<<<<<<< HEAD
   pull_request:
     branches:
       - master
@@ -14,6 +15,8 @@ on:
   push:
     branches:
       - master
+=======
+>>>>>>> master
   workflow_dispatch:
 
 concurrency:
