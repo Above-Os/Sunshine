@@ -140,8 +140,8 @@ namespace config {
       workarounds_t wa;
     } dd;
 
-    int min_fps_factor;  // Minimum fps target, determines minimum frame time
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
+    double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
   };
 
   struct audio_t {

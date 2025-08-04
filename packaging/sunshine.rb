@@ -6,7 +6,7 @@ class @PROJECT_NAME@ < Formula
   homepage "@PROJECT_HOMEPAGE_URL@"
   url "@GITHUB_CLONE_URL@",
     tag: "@GITHUB_TAG@"
-  version "@FORMULA_VERSION@"
+  version "@BUILD_VERSION@"
   license all_of: ["GPL-3.0-only"]
   head "@GITHUB_CLONE_URL@", branch: "@GITHUB_DEFAULT_BRANCH@"
 
@@ -31,7 +31,7 @@ class @PROJECT_NAME@ < Formula
   depends_on "graphviz" => :build
   depends_on "ninja" => :build
   depends_on "node" => :build
-  depends_on "pkg-config" => :build
+  depends_on "pkgconf" => :build
   depends_on "curl"
   depends_on "miniupnpc"
   depends_on "openssl"
@@ -58,6 +58,7 @@ class @PROJECT_NAME@ < Formula
     depends_on "perl" => :build
     depends_on "pixman" => :build
     depends_on "avahi"
+    depends_on "libayatana-appindicator"
     depends_on "libcap"
     depends_on "libdrm"
     depends_on "libnotify"
@@ -206,7 +207,7 @@ index 5b3638d..aca9481 100644
 
     args = %W[
       -DBUILD_WERROR=ON
-      -DCMAKE_CXX_STANDARD=20
+      -DCMAKE_CXX_STANDARD=23
       -DCMAKE_INSTALL_PREFIX=#{prefix}
       -DHOMEBREW_ALLOW_FETCHCONTENT=ON
       -DOPENSSL_ROOT_DIR=#{Formula["openssl"].opt_prefix}
@@ -248,58 +249,13 @@ index 5b3638d..aca9481 100644
     args << "-DCUDA_FAIL_ON_MISSING=OFF" if OS.linux?
     args << "-DSUNSHINE_ENABLE_TRAY=OFF" if OS.mac?
 
-    # Handle system tray on Linux
-    if OS.linux?
-      # Build and install libayatana components
+    system "cmake", "-S", ".", "-B", "build", "-G", "Unix Makefiles",
+            *std_cmake_args,
+            *args
 
-      # Build libdbusmenu
-      resource("libdbusmenu").stage do
-        system "./configure",
-               "--prefix=#{prefix}",
-               "--with-gtk=3",
-               "--disable-dumper",
-               "--disable-static",
-               "--disable-tests",
-               "--disable-gtk-doc",
-               "--enable-introspection=no",
-               "--disable-vala"
-        system "make", "install"
-      end
-
-      # Build ayatana-ido
-      resource("ayatana-ido").stage do
-        system "cmake", "-S", ".", "-B", "build", "-G", "Ninja",
-               "-DCMAKE_INSTALL_PREFIX=#{prefix}",
-               "-DENABLE_INTROSPECTION=OFF",
-               *std_cmake_args
-        system "ninja", "-C", "build"
-        system "ninja", "-C", "build", "install"
-      end
-
-      # Build libayatana-indicator
-      resource("libayatana-indicator").stage do
-        ENV.append_path "PKG_CONFIG_PATH", "#{lib}/pkgconfig"
-        ENV.append "LDFLAGS", "-L#{lib}"
-
-        system "cmake", "-S", ".", "-B", "build", "-G", "Ninja",
-               "-DCMAKE_INSTALL_PREFIX=#{prefix}",
-               *std_cmake_args
-        system "ninja", "-C", "build"
-        system "ninja", "-C", "build", "install"
-      end
-
-      # Build libayatana-appindicator
-      resource("libayatana-appindicator").stage do
-        system "cmake", "-S", ".", "-B", "build", "-G", "Ninja",
-               "-DCMAKE_INSTALL_PREFIX=#{prefix}",
-               "-DENABLE_BINDINGS_MONO=OFF",
-               "-DENABLE_BINDINGS_VALA=OFF",
-               "-DENABLE_GTKDOC=OFF",
-               *std_cmake_args
-        system "ninja", "-C", "build"
-        system "ninja", "-C", "build", "install"
-      end
-    end
+    system "make", "-C", "build"
+    system "make", "-C", "build", "install"
+    bin.install "build/tests/test_sunshine"
 
     system "cmake", "-S", ".", "-B", "build", "-G", "Unix Makefiles",
             *std_cmake_args,
@@ -319,31 +275,31 @@ index 5b3638d..aca9481 100644
     run [opt_bin/"sunshine", "~/.config/sunshine/sunshine.conf"]
   end
 
-  def caveats
-    caveats_message = <<~EOS
-      Thanks for installing @PROJECT_NAME@!
-
-      To get started, review the documentation at:
-        https://docs.lizardbyte.dev/projects/sunshine
-    EOS
-
+  def post_install
     if OS.linux?
-      caveats_message += <<~EOS
+      opoo <<~EOS
         ATTENTION: To complete installation, you must run the following command:
         `sudo #{bin}/postinst`
       EOS
     end
 
     if OS.mac?
-      caveats_message += <<~EOS
+      opoo <<~EOS
         Sunshine can only access microphones on macOS due to system limitations.
         To stream system audio use "Soundflower" or "BlackHole".
 
         Gamepads are not currently supported on macOS.
       EOS
     end
+  end
 
-    caveats_message
+  def caveats
+    <<~EOS
+      Thanks for installing @PROJECT_NAME@!
+
+      To get started, review the documentation at:
+        https://docs.lizardbyte.dev/projects/sunshine
+    EOS
   end
 
   test do

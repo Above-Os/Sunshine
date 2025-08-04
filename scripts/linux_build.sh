@@ -96,9 +96,11 @@ function add_arch_deps() {
     'base-devel'
     'cmake'
     'curl'
+    'doxygen'
     "gcc${gcc_version}"
     "gcc${gcc_version}-libs"
     'git'
+    'graphviz'
     'libayatana-appindicator'
     'libcap'
     'libdrm'
@@ -138,9 +140,12 @@ function add_arch_deps() {
 
 function add_debian_based_deps() {
   dependencies+=(
+    "appstream"
+    "appstream-util"
     "bison"  # required if we need to compile doxygen
     "build-essential"
     "cmake"
+    "desktop-file-utils"
     "doxygen"
     "flex"  # required if we need to compile doxygen
     "gcc-${gcc_version}"
@@ -201,13 +206,16 @@ function add_ubuntu_deps() {
 
 function add_fedora_deps() {
   dependencies+=(
+    "appstream"
     "cmake"
+    "desktop-file-utils"
     "doxygen"
     "gcc${gcc_version}"
     "gcc${gcc_version}-c++"
     "git"
     "graphviz"
     "libappindicator-gtk3-devel"
+    "libappstream-glib"
     "libcap-devel"
     "libcurl-devel"
     "libdrm-devel"
@@ -386,7 +394,7 @@ function run_install() {
     "gcc-ranlib"
   )
 
-  #set gcc version based on distros 
+  #set gcc version based on distros
   if [ "$distro" == "arch" ]; then
     export CC=gcc-14
     export CXX=g++-14
@@ -394,7 +402,7 @@ function run_install() {
     for file in "${gcc_alternative_files[@]}"; do
       file_path="/etc/alternatives/$file"
       if [ -e "$file_path" ]; then
-        mv "$file_path" "$file_path.bak"
+        ${sudo_cmd} mv "$file_path" "$file_path.bak"
       fi
     done
 
@@ -433,12 +441,14 @@ function run_install() {
       echo "Compiling doxygen"
       doxygen_url="https://github.com/doxygen/doxygen/releases/download/Release_${_doxygen_min}/doxygen-${doxygen_min}.src.tar.gz"
       echo "doxygen url: ${doxygen_url}"
-      wget "$doxygen_url" --progress=bar:force:noscroll -q --show-progress -O "${build_dir}/doxygen.tar.gz"
-      tar -xzf "${build_dir}/doxygen.tar.gz"
-      cd "doxygen-${doxygen_min}"
-      cmake -DCMAKE_BUILD_TYPE=Release -G="Ninja" -B="build" -S="."
-      ninja -C "build" -j"${num_processors}"
-      ninja -C "build" install
+      pushd "${build_dir}"
+        wget "$doxygen_url" --progress=bar:force:noscroll -q --show-progress -O "doxygen.tar.gz"
+        tar -xzf "doxygen.tar.gz"
+        cd "doxygen-${doxygen_min}"
+        cmake -DCMAKE_BUILD_TYPE=Release -G="Ninja" -B="build" -S="."
+        ninja -C "build" -j"${num_processors}"
+        ${sudo_cmd} ninja -C "build" install
+      popd
     else
       echo "Doxygen version not in range, skipping docs"
       cmake_args+=("-DBUILD_DOCS=OFF")
@@ -450,6 +460,8 @@ function run_install() {
     nvm_url="https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh"
     echo "nvm url: ${nvm_url}"
     wget -qO- ${nvm_url} | bash
+
+    # shellcheck source=/dev/null  # we don't care that shellcheck cannot find nvm.sh
     source "$HOME/.nvm/nvm.sh"
     nvm install node
     nvm use node
@@ -460,6 +472,8 @@ function run_install() {
     install_cuda
     cmake_args+=("-DSUNSHINE_ENABLE_CUDA=ON")
     cmake_args+=("-DCMAKE_CUDA_COMPILER:PATH=$nvcc_path")
+  else
+    cmake_args+=("-DSUNSHINE_ENABLE_CUDA=OFF")
   fi
 
   # Cmake stuff here
@@ -467,6 +481,16 @@ function run_install() {
   echo "cmake args:"
   echo "${cmake_args[@]}"
   cmake "${cmake_args[@]}"
+
+  # Run appstream validation, etc.
+  appstreamcli validate "build/dev.lizardbyte.app.Sunshine.metainfo.xml"
+  appstream-util validate "build/dev.lizardbyte.app.Sunshine.metainfo.xml"
+  desktop-file-validate "build/dev.lizardbyte.app.Sunshine.desktop"
+  if [ "$appimage_build" == 0 ]; then
+    desktop-file-validate "build/dev.lizardbyte.app.Sunshine.terminal.desktop"
+  fi
+
+  # Build the project
   ninja -C "build"
 
   # Create the package
@@ -558,6 +582,15 @@ elif grep -q "Ubuntu 22.04" /etc/os-release; then
 elif grep -q "Ubuntu 24.04" /etc/os-release; then
   distro="ubuntu"
   version="24.04"
+  package_update_command="${sudo_cmd} apt-get update"
+  package_install_command="${sudo_cmd} apt-get install -y"
+  cuda_version="11.8.0"
+  cuda_build="520.61.05"
+  gcc_version="11"
+  nvm_node=0
+elif grep -q "Ubuntu 25.04" /etc/os-release; then
+  distro="ubuntu"
+  version="25.04"
   package_update_command="${sudo_cmd} apt-get update"
   package_install_command="${sudo_cmd} apt-get install -y"
   cuda_version="11.8.0"

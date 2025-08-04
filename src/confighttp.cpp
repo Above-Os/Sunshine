@@ -34,7 +34,6 @@
 #include "process.h"
 #include "utility.h"
 #include "uuid.h"
-#include "version.h"
 
 using namespace std::literals;
 
@@ -81,7 +80,6 @@ namespace confighttp {
   void send_response(resp_https_t response, const nlohmann::json &output_tree) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
-
     response->write(output_tree.dump(), headers);
   }
 
@@ -214,6 +212,39 @@ namespace confighttp {
   }
 
   /**
+   * @brief Validate the request content type and send bad request when mismatch.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param contentType The expected content type
+   */
+  bool check_content_type(resp_https_t response, req_https_t request, const std::string_view &contentType) {
+    auto requestContentType = request->header.find("content-type");
+    if (requestContentType == request->header.end()) {
+      bad_request(response, request, "Content type not provided");
+      return false;
+    }
+    // Extract the media type part before any parameters (e.g., charset)
+    std::string actualContentType = requestContentType->second;
+    size_t semicolonPos = actualContentType.find(';');
+    if (semicolonPos != std::string::npos) {
+      actualContentType = actualContentType.substr(0, semicolonPos);
+    }
+
+    // Trim whitespace and convert to lowercase for case-insensitive comparison
+    boost::algorithm::trim(actualContentType);
+    boost::algorithm::to_lower(actualContentType);
+
+    std::string expectedContentType(contentType);
+    boost::algorithm::to_lower(expectedContentType);
+
+    if (actualContentType != expectedContentType) {
+      bad_request(response, request, "Content type mismatch");
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * @brief Get the index page.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -229,6 +260,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "index.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -247,6 +280,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "pin.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -265,6 +300,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "apps.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     headers.emplace("Access-Control-Allow-Origin", "https://images.igdb.com/");
     response->write(content, headers);
   }
@@ -284,6 +321,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "clients.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -302,6 +341,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "config.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -320,6 +361,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "password.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -337,6 +380,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "welcome.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -355,6 +400,8 @@ namespace confighttp {
     std::string content = file_handler::read_file(WEB_DIR "troubleshooting.html");
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(content, headers);
   }
 
@@ -371,6 +418,8 @@ namespace confighttp {
     std::ifstream in(WEB_DIR "images/sunshine.ico", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/x-icon");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(SimpleWeb::StatusCode::success_ok, in, headers);
   }
 
@@ -387,6 +436,8 @@ namespace confighttp {
     std::ifstream in(WEB_DIR "images/logo-sunshine-45.png", std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/png");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(SimpleWeb::StatusCode::success_ok, in, headers);
   }
 
@@ -535,6 +586,9 @@ namespace confighttp {
    * @api_examples{/api/apps| POST| {"name":"Hello, World!","index":-1}}
    */
   void saveApp(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -602,6 +656,9 @@ namespace confighttp {
    * @api_examples{/api/apps/close| POST| null}
    */
   void closeApp(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -623,6 +680,8 @@ namespace confighttp {
    * @api_examples{/api/apps/9999| DELETE| null}
    */
   void deleteApp(resp_https_t response, req_https_t request) {
+    // Skip check_content_type() for this endpoint since the request body is not used.
+
     if (!authenticate(response, request)) {
       return;
     }
@@ -703,6 +762,9 @@ namespace confighttp {
    * @api_examples{/api/unpair| POST| {"uuid":"1234"}}
    */
   void unpair(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -733,6 +795,9 @@ namespace confighttp {
    * @api_examples{/api/clients/unpair-all| POST| null}
    */
   void unpairAll(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -764,7 +829,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
-    output_tree["version"] = PROJECT_VER;
+    output_tree["version"] = PROJECT_VERSION;
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
 
@@ -809,6 +874,9 @@ namespace confighttp {
    * @api_examples{/api/config| POST| {"key":"value"}}
    */
   void saveConfig(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -855,6 +923,9 @@ namespace confighttp {
    * @api_examples{/api/covers/upload| POST| {"key":"igdb_1234","url":"https://images.igdb.com/igdb/image/upload/t_cover_big_2x/abc123.png"}}
    */
   void uploadCover(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -938,6 +1009,9 @@ namespace confighttp {
    * @api_examples{/api/password| POST| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!config::sunshine.username.empty() && !authenticate(response, request)) {
       return;
     }
@@ -1008,6 +1082,9 @@ namespace confighttp {
    * @api_examples{/api/pin| POST| {"pin":"1234","name":"My PC"}}
    */
   void savePin(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -1044,6 +1121,9 @@ namespace confighttp {
    * @api_examples{/api/reset-display-device-persistence| POST| null}
    */
   void resetDisplayDevicePersistence(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
@@ -1063,6 +1143,9 @@ namespace confighttp {
    * @api_examples{/api/restart| POST| null}
    */
   void restart(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
     if (!authenticate(response, request)) {
       return;
     }
