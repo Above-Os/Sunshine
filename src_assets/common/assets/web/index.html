@@ -97,18 +97,18 @@
       }
     },
     async created() {
-      try {
-        let config = await fetch("./api/config").then((r) => r.json());
-        this.notifyPreReleases = config.notify_pre_releases;
-        this.version = new SunshineVersion(null, config.version);
-        console.log("Version: ", this.version.version)
-        this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);
-        console.log("GitHub Version: ", this.githubVersion.version)
-        this.preReleaseVersion = new SunshineVersion((await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases").then((r) => r.json())).find(release => release.prerelease), null);
-        console.log("Pre-Release Version: ", this.preReleaseVersion.version)
-      } catch (e) {
-        console.error(e);
-      }
+      // try {
+      //   let config = await fetch("./api/config").then((r) => r.json());
+      //   this.notifyPreReleases = config.notify_pre_releases;
+      //   this.version = new SunshineVersion(null, config.version);
+      //   console.log("Version: ", this.version.version)
+      //   this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);
+      //   console.log("GitHub Version: ", this.githubVersion.version)
+      //   this.preReleaseVersion = new SunshineVersion((await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases").then((r) => r.json())).find(release => release.prerelease), null);
+      //   console.log("Pre-Release Version: ", this.preReleaseVersion.version)
+      // } catch (e) {
+      //   console.error(e);
+      // }
       try {
         this.logs = (await fetch("./api/logs").then(r => r.text()))
       } catch (e) {
