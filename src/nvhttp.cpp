@@ -761,7 +761,7 @@ namespace nvhttp {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
       tree.put("root.LocalIP", config::nvhttp.external_ip);
     }
-    
+
     auto current_appid = proc::proc.running();
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
