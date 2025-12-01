@@ -3,7 +3,49 @@ Sunshine binaries are built using [CMake](https://cmake.org) and requires `cmake
 
 ## Building Locally
 
+### Compiler
+It is recommended to use one of the following compilers:
+
+| Compiler    | Version |
+|:------------|:--------|
+| GCC         | 13+     |
+| Clang       | 17+     |
+| Apple Clang | 15+     |
+
 ### Dependencies
+
+#### FreeBSD
+> [!CAUTION]
+> Sunshine support for FreeBSD is experimental and may be incomplete or not work as expected
+
+##### Install dependencies
+```sh
+pkg install -y \
+  audio/opus \
+  audio/pulseaudio \
+  devel/cmake \
+  devel/evdev-proto \
+  devel/git \
+  devel/libayatana-appindicator \
+  devel/libevdev \
+  devel/libnotify \
+  devel/ninja \
+  devel/pkgconf \
+  ftp/curl \
+  graphics/libdrm \
+  graphics/wayland \
+  multimedia/libva \
+  net/miniupnpc \
+  ports-mgmt/pkg \
+  security/openssl \
+  shells/bash \
+  www/npm \
+  x11/libX11 \
+  x11/libxcb \
+  x11/libXfixes \
+  x11/libXrandr \
+  x11/libXtst
+```
 
 #### Linux
 Dependencies vary depending on the distribution. You can reference our
@@ -16,11 +58,12 @@ Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
 
 1. The version installed depends on the version of GCC.
 2. The version of CUDA you use will determine compatibility with various GPU generations.
-   At the time of writing, the recommended version to use is CUDA ~11.8.
+   At the time of writing, the recommended version to use is CUDA ~12.9.
    See [CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html) for more info.
 
-@tip{To install older versions, select the appropriate run file based on your desired CUDA version and architecture
-according to [CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive)}
+> [!NOTE]
+> To install older versions, select the appropriate run file based on your desired CUDA version and architecture
+> according to [CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive)
 
 #### macOS
 You can either use [Homebrew](https://brew.sh) or [MacPorts](https://www.macports.org) to install dependencies.
@@ -118,12 +161,18 @@ cmake -B build -G Ninja -S .
 ninja -C build
 ```
 
-@tip{Available build options can be found in
-[options.cmake](https://github.com/LizardByte/Sunshine/blob/master/cmake/prep/options.cmake).}
+> [!TIP]
+> Available build options can be found in
+> [options.cmake](https://github.com/LizardByte/Sunshine/blob/master/cmake/prep/options.cmake).
 
 ### Package
 
 @tabs{
+  @tab{FreeBSD | @tabs{
+    @tab{pkg | ```bash
+      cpack -G FREEBSD --config ./build/CPackConfig.cmake
+      ```}
+  }}
   @tab{Linux | @tabs{
     @tab{deb | ```bash
       cpack -G DEB --config ./build/CPackConfig.cmake

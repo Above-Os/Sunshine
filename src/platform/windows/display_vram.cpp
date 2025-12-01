@@ -7,7 +7,7 @@
 
 // platform includes
 #include <d3dcompiler.h>
-#include <directxmath.h>
+#include <DirectXMath.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -457,12 +457,12 @@ namespace platf::dxgi {
     }
 
     void apply_colorspace(const ::video::sunshine_colorspace_t &colorspace) {
-      auto color_vectors = ::video::color_vectors_from_colorspace(colorspace);
+      auto color_vectors = ::video::color_vectors_from_colorspace(colorspace, true);
 
       if (format == DXGI_FORMAT_AYUV ||
           format == DXGI_FORMAT_R16_UINT ||
           format == DXGI_FORMAT_Y410) {
-        color_vectors = ::video::new_color_vectors_from_colorspace(colorspace);
+        color_vectors = ::video::color_vectors_from_colorspace(colorspace, false);
       }
 
       if (!color_vectors) {
@@ -775,7 +775,7 @@ namespace platf::dxgi {
         BOOST_LOG(warning) << "Failed to increase encoding GPU thread priority. Please run application as administrator for optimal performance.";
       }
 
-      auto default_color_vectors = ::video::color_vectors_from_colorspace(::video::colorspace_e::rec601, false);
+      auto default_color_vectors = ::video::color_vectors_from_colorspace({::video::colorspace_e::rec601, false, 8}, true);
       if (!default_color_vectors) {
         BOOST_LOG(error) << "Missing color vectors for Rec. 601"sv;
         return -1;
@@ -1739,7 +1739,7 @@ namespace platf::dxgi {
     img->data = nullptr;
     if (img->encoder_texture_handle) {
       CloseHandle(img->encoder_texture_handle);
-      img->encoder_texture_handle = NULL;
+      img->encoder_texture_handle = nullptr;
     }
 
     // Initialize format-dependent fields

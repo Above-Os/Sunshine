@@ -7,6 +7,7 @@
 
 // standard includes
 #include <filesystem>
+#include <format>
 #include <string>
 #include <utility>
 
@@ -38,6 +39,8 @@
 using namespace std::literals;
 
 namespace nvhttp {
+
+  static constexpr std::string_view EMPTY_PROPERTY_TREE_ERROR_MSG = "Property tree is empty. Probably, control flow got interrupted by an unexpected C++ exception. This is a bug in Sunshine. Moonlight-qt will report Malformed XML (missing root element)."sv;
 
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
@@ -154,7 +157,7 @@ namespace nvhttp {
   std::string get_arg(const args_t &args, const char *name, const char *default_value = nullptr) {
     auto it = args.find(name);
     if (it == std::end(args)) {
-      if (default_value != NULL) {
+      if (default_value != nullptr) {
         return std::string(default_value);
       }
 
@@ -306,6 +309,7 @@ namespace nvhttp {
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
     launch_session->surround_info = util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
+    launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
 
@@ -636,7 +640,7 @@ namespace nvhttp {
       tree.put("root.<xmlattr>.status_code", 400);
       tree.put(
         "root.<xmlattr>.status_message",
-        "Pin must be 4 digits, " + std::to_string(pin.size()) + " provided"
+        std::format("Pin must be 4 digits, {} provided", pin.size())
       );
       return false;
     }
@@ -757,7 +761,7 @@ namespace nvhttp {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
       tree.put("root.LocalIP", config::nvhttp.external_ip);
     }
-    
+
     auto current_appid = proc::proc.running();
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
@@ -818,6 +822,10 @@ namespace nvhttp {
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
+
+      if (tree.empty()) {
+        BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+      }
 
       pt::write_xml(data, tree);
       response->write(data.str());
@@ -901,7 +909,15 @@ namespace nvhttp {
     }
 
     tree.put("root.<xmlattr>.status_code", 200);
-    tree.put("root.sessionUrl0", launch_session->rtsp_url_scheme + net::addr_to_url_escaped_string(request->local_endpoint().address()) + ':' + std::to_string(net::map_port(rtsp_stream::RTSP_SETUP_PORT)));
+    tree.put(
+      "root.sessionUrl0",
+      std::format(
+        "{}{}:{}",
+        launch_session->rtsp_url_scheme,
+        net::addr_to_url_escaped_string(request->local_endpoint().address()),
+        static_cast<int>(net::map_port(rtsp_stream::RTSP_SETUP_PORT))
+      )
+    );
     tree.put("root.gamesession", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
@@ -916,6 +932,10 @@ namespace nvhttp {
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
+
+      if (tree.empty()) {
+        BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+      }
 
       pt::write_xml(data, tree);
       response->write(data.str());
@@ -983,7 +1003,15 @@ namespace nvhttp {
     }
 
     tree.put("root.<xmlattr>.status_code", 200);
-    tree.put("root.sessionUrl0", launch_session->rtsp_url_scheme + net::addr_to_url_escaped_string(request->local_endpoint().address()) + ':' + std::to_string(net::map_port(rtsp_stream::RTSP_SETUP_PORT)));
+    tree.put(
+      "root.sessionUrl0",
+      std::format(
+        "{}{}:{}",
+        launch_session->rtsp_url_scheme,
+        net::addr_to_url_escaped_string(request->local_endpoint().address()),
+        static_cast<int>(net::map_port(rtsp_stream::RTSP_SETUP_PORT))
+      )
+    );
     tree.put("root.resume", 1);
 
     rtsp_stream::launch_session_raise(launch_session);

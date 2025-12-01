@@ -1,13 +1,6 @@
 /**
-<<<<<<<< HEAD:src/platform/windows/windows.rc
  * @file src/platform/windows/windows.rc
  * @brief Windows resource file.
-========
- * @file src/platform/windows/windows.rc.in
- * @brief Windows resource file template.
- * @note The final `windows.rc` is generated from this file during the CMake build.
- * @todo Use CMake definitions directly, instead of configuring this file.
->>>>>>>> master:src/platform/windows/windows.rc.in
  */
 #include "winver.h"
 

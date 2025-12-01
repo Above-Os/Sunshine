@@ -12,6 +12,7 @@ extern "C" {
 // standard includes
 #include <array>
 #include <cctype>
+#include <format>
 #include <set>
 #include <unordered_map>
 #include <utility>
@@ -864,7 +865,7 @@ namespace rtsp_stream {
     session_option.next = &port_option;
 
     // Moonlight merely requires 'server_port=<port>'
-    auto port_value = "server_port=" + std::to_string(port);
+    auto port_value = std::format("server_port={}", static_cast<int>(port));
 
     port_option.option = const_cast<char *>("Transport");
     port_option.content = port_value.data();
@@ -951,6 +952,7 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-general.encryptionEnabled"sv, "0"sv);
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
+    args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
 
     stream::config_t config;
 
@@ -980,6 +982,7 @@ namespace rtsp_stream {
       config.monitor.height = util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
       config.monitor.width = util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
       config.monitor.framerate = util::from_view(args.at("x-nv-video[0].maxFPS"sv));
+      config.monitor.framerateX100 = util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
       config.monitor.bitrate = util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
@@ -1028,6 +1031,10 @@ namespace rtsp_stream {
         }
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+    }
+    if (session.continuous_audio) {
+      BOOST_LOG(info) << "Client requested continuous audio"sv;
+      config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
 
     // If the client sent a configured bitrate, we will choose the actual bitrate ourselves

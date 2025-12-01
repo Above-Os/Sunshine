@@ -554,6 +554,7 @@ namespace config {
     true,  // back as touchpad click enabled (manual DS4 only)
     true,  // client gamepads with motion events are emulated as DS4
     true,  // client gamepads with touchpads are emulated as DS4
+    true,  // ds5_inputtino_randomize_mac
 
     true,  // keyboard enabled
     true,  // mouse enabled
@@ -577,6 +578,7 @@ namespace config {
     "ipv4",  // Address family
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
+    true,  // system_tray
     {},  // prep commands
   };
 
@@ -1043,6 +1045,11 @@ namespace config {
     // TODO: Android can possibly support this
     if (!fs::exists(stream.file_apps.c_str())) {
       fs::copy_file(SUNSHINE_ASSETS_DIR "/apps.json", stream.file_apps);
+      fs::permissions(
+        stream.file_apps,
+        fs::perms::owner_read | fs::perms::owner_write,
+        fs::perm_options::add
+      );
     }
 #endif
 
@@ -1216,6 +1223,7 @@ namespace config {
     bool_f(vars, "ds4_back_as_touchpad_click", input.ds4_back_as_touchpad_click);
     bool_f(vars, "motion_as_ds4", input.motion_as_ds4);
     bool_f(vars, "touchpad_as_ds4", input.touchpad_as_ds4);
+    bool_f(vars, "ds5_inputtino_randomize_mac", input.ds5_inputtino_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
     bool_f(vars, "keyboard", input.keyboard);
@@ -1227,6 +1235,7 @@ namespace config {
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
+    bool_f(vars, "system_tray", sunshine.system_tray);
 
     int port = sunshine.port;
     int_between_f(vars, "port"s, port, {1024 + nvhttp::PORT_HTTPS, 65535 - rtsp_stream::RTSP_SETUP_PORT});
@@ -1250,6 +1259,7 @@ namespace config {
                                                                    "en_US"sv,  // English (US)
                                                                    "es"sv,  // Spanish
                                                                    "fr"sv,  // French
+                                                                   "hu"sv,  // Hungarian
                                                                    "it"sv,  // Italian
                                                                    "ja"sv,  // Japanese
                                                                    "ko"sv,  // Korean
@@ -1260,6 +1270,7 @@ namespace config {
                                                                    "sv"sv,  // Swedish
                                                                    "tr"sv,  // Turkish
                                                                    "uk"sv,  // Ukrainian
+                                                                   "vi"sv,  // Vietnamese
                                                                    "zh"sv,  // Chinese
                                                                    "zh_TW"sv,  // Chinese (Traditional)
                                                                  });
@@ -1421,7 +1432,7 @@ namespace config {
       if (!service_ctrl::is_service_running()) {
         // If the service isn't running, relaunch ourselves as admin to start it
         WCHAR executable[MAX_PATH];
-        GetModuleFileNameW(NULL, executable, ARRAYSIZE(executable));
+        GetModuleFileNameW(nullptr, executable, ARRAYSIZE(executable));
 
         SHELLEXECUTEINFOW shell_exec_info {};
         shell_exec_info.cbSize = sizeof(shell_exec_info);
