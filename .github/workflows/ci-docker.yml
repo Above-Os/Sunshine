@@ -50,7 +50,7 @@ jobs:
       - name: Find dockerfiles
         id: find
         run: |
-          dockerfiles=$(find . -type f -iname "Dockerfile" -o -iname "debian-bookworm.dockerfile")
+          dockerfiles=$(find . -type f -iname "Dockerfile" -o -iname "debian-trixie.dockerfile")
 
           echo "found dockerfiles: ${dockerfiles}"
 
