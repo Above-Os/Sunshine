@@ -104,6 +104,7 @@ jobs:
     if: needs.check_dockerfiles.outputs.dockerfiles
     needs:
       - check_dockerfiles
+      - release-setup
     permissions:
       contents: read
       packages: write
