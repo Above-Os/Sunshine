@@ -16,8 +16,21 @@
 #include "nvenc/nvenc_config.h"
 
 namespace config {
+  // Valid range for the packetsize limit
+  constexpr int PACKETSIZE_MIN = 200;
+  constexpr int PACKETSIZE_MAX = 65535;
+  constexpr int PACKETSIZE_SMALL = 500;
+  constexpr int PACKETSIZE_LARGE = 1456;
+
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
+
+  // sensitive values that should be redacted from logging
+  inline constexpr std::array redacted_config = {
+    "csrf_allowed_origins"
+  };
+
+  void log_config_settings(const std::unordered_map<std::string, std::string> &vars, bool save);
 
   struct video_t {
     // ffmpeg params
@@ -79,6 +92,11 @@ namespace config {
     struct {
       bool strict_rc_buffer;
     } vaapi;
+
+    struct {
+      int tune;  // 0=default, 1=hq, 2=ll, 3=ull, 4=lossless
+      int rc_mode;  // 0=driver, 1=cqp, 2=cbr, 4=vbr
+    } vk;
 
     std::string capture;
     std::string encoder;
@@ -145,10 +163,10 @@ namespace config {
   };
 
   struct audio_t {
-    std::string sink;
-    std::string virtual_sink;
-    bool stream;
-    bool install_steam_drivers;
+    std::string sink;  ///< Audio output device/sink to use for audio capture
+    std::string virtual_sink;  ///< Virtual audio sink for audio routing
+    bool stream;  ///< Enable audio streaming to clients
+    bool install_steam_drivers;  ///< Install Steam audio drivers for enhanced compatibility
   };
 
   constexpr int ENCRYPTION_MODE_NEVER = 0;  // Never use video encryption, even if the client supports it
@@ -165,6 +183,9 @@ namespace config {
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;
     int wan_encryption_mode;
+
+    // Limit the packetsize to avoid fragmentation on a low MTU link
+    int packetsize;
   };
 
   struct nvhttp_t {
@@ -253,11 +274,16 @@ namespace config {
 
     std::uint16_t port;
     std::string address_family;
+    std::string bind_address;
 
     std::string log_file;
     bool notify_pre_releases;
     bool system_tray;
     std::vector<prep_cmd_t> prep_cmds;
+
+    // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
+    // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
+    std::vector<std::string> csrf_allowed_origins;
   };
 
   extern video_t video;

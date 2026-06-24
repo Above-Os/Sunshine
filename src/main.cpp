@@ -5,8 +5,13 @@
 // standard includes
 #include <codecvt>
 #include <csignal>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+
+#ifdef __APPLE__
+  #include <mach-o/dyld.h>
+#endif
 
 // local includes
 #include "confighttp.h"
@@ -111,11 +116,32 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
 
   // Main thread event loop
   BOOST_LOG(info) << "Starting main loop"sv;
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
   while (system_tray::process_tray_events() == 0);
+#endif
   BOOST_LOG(info) << "Main loop has exited"sv;
 }
 
 int main(int argc, char *argv[]) {
+#ifdef __APPLE__
+  // Bundle assets are referenced relative to the executable
+  // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.
+  {
+    char executable[2048];
+    uint32_t size = sizeof(executable);
+    if (_NSGetExecutablePath(executable, &size) == 0) {
+      std::error_code ec;
+      auto exec_dir = std::filesystem::weakly_canonical(std::filesystem::path {executable}, ec).parent_path();
+      if (!ec) {
+        std::filesystem::current_path(exec_dir, ec);
+      }
+      if (ec) {
+        std::cerr << "Failed to set working directory to executable path: " << ec.message() << '\n';
+      }
+    }
+  }
+#endif
+
   lifetime::argv = argv;
 
   task_pool_util::TaskPool::task_id_t force_shutdown = nullptr;
@@ -155,9 +181,7 @@ int main(int argc, char *argv[]) {
   log_publisher_data();
 
   // Log modified_config_settings
-  for (auto &[name, val] : config::modified_config_settings) {
-    BOOST_LOG(info) << "config: '"sv << name << "' = "sv << val;
-  }
+  config::log_config_settings(config::modified_config_settings, false);
   config::modified_config_settings.clear();
 
   if (!config::sunshine.cmd.name.empty()) {
@@ -207,6 +231,7 @@ int main(int argc, char *argv[]) {
   auto session_monitor_join_thread_future = session_monitor_join_thread_promise.get_future();
 
   std::thread session_monitor_thread([&]() {
+    platf::set_thread_name("session_monitor");
     session_monitor_join_thread_promise.set_value_at_thread_exit();
 
     WNDCLASSA wnd_class {};
@@ -287,7 +312,10 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
-    system_tray::end_tray();
+
+    if (tray_is_enabled && config::sunshine.system_tray) {
+      system_tray::end_tray();
+    }
 
     display_device_deinit_guard = nullptr;
   });
@@ -304,7 +332,10 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
-    system_tray::end_tray();
+
+    if (tray_is_enabled && config::sunshine.system_tray) {
+      system_tray::end_tray();
+    }
 
     display_device_deinit_guard = nullptr;
   });
@@ -382,7 +413,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Starting system tray"sv;
 #ifdef _WIN32
     // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,
-    // he tray icon would not appear even though Sunshine is running correctly otherwise.
+    // the tray icon would not appear even though Sunshine is running correctly otherwise.
     // Restarting the service would allow the icon to appear normally.
     // For now we will keep the Windows tray icon on a separate thread.
     // Ideally, we would run the system tray on the main thread for all platforms.

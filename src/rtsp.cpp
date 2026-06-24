@@ -224,7 +224,7 @@ namespace rtsp_stream {
       }
 
       msg_t req {new msg_t::element_type {}};
-      if (auto status = parseRtspMessage(req.get(), (char *) plaintext.data(), plaintext.size())) {
+      if (auto status = parseRtspMessage(req.get(), (char *) plaintext.data(), (int) plaintext.size())) {
         BOOST_LOG(error) << "Malformed RTSP message: ["sv << status << ']';
 
         respond(socket->sock, *socket->session, nullptr, 400, "BAD REQUEST", 0, {});
@@ -290,7 +290,7 @@ namespace rtsp_stream {
 
       auto end = socket->begin + bytes;
       msg_t req {new msg_t::element_type {}};
-      if (auto status = parseRtspMessage(req.get(), socket->msg_buf.data(), (std::size_t) (end - socket->msg_buf.data()))) {
+      if (auto status = parseRtspMessage(req.get(), socket->msg_buf.data(), (int) (end - socket->msg_buf.data()))) {
         BOOST_LOG(error) << "Malformed RTSP message: ["sv << status << ']';
 
         respond(socket->sock, *socket->session, nullptr, 400, "BAD REQUEST", 0, {});
@@ -315,7 +315,7 @@ namespace rtsp_stream {
             return (bool) std::isdigit(ch);
           });
 
-          content_length = util::from_chars(begin, std::end(content));
+          content_length = (int) util::from_chars(begin, std::end(content));
           break;
         }
       }
@@ -412,7 +412,14 @@ namespace rtsp_stream {
 
       acceptor.set_option(boost::asio::socket_base::reuse_address {true});
 
-      acceptor.bind(tcp::endpoint(af == net::IPV4 ? tcp::v4() : tcp::v6(), port), ec);
+      auto bind_addr_str = net::get_bind_address(af);
+      const auto bind_addr = boost::asio::ip::make_address(bind_addr_str, ec);
+      if (ec) {
+        BOOST_LOG(error) << "Invalid bind address: "sv << bind_addr_str << " - " << ec.message();
+        return -1;
+      }
+
+      acceptor.bind(tcp::endpoint(bind_addr, port), ec);
       if (ec) {
         return -1;
       }
@@ -534,7 +541,7 @@ namespace rtsp_stream {
      */
     int session_count() {
       auto lg = _session_slots.lock();
-      return _session_slots->size();
+      return (int) _session_slots->size();
     }
 
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;
@@ -555,6 +562,20 @@ namespace rtsp_stream {
           stream::session::stop(slot);
           stream::session::join(slot);
 
+          i = _session_slots->erase(i);
+        } else {
+          i++;
+        }
+      }
+    }
+
+    void clear_by_cert(std::string_view cert) {
+      auto lg = _session_slots.lock();
+      for (auto i = _session_slots->begin(); i != _session_slots->end();) {
+        auto &slot = *(*i);
+        if (stream::session::client_cert(slot) == cert) {
+          stream::session::stop(slot);
+          stream::session::join(slot);
           i = _session_slots->erase(i);
         } else {
           i++;
@@ -634,6 +655,10 @@ namespace rtsp_stream {
 
   void terminate_sessions() {
     server.clear(true);
+  }
+
+  void terminate_sessions_by_cert(std::string_view cert) {
+    server.clear_by_cert(cert);
   }
 
   int send(tcp::socket &sock, const std::string_view &sv) {
@@ -959,38 +984,65 @@ namespace rtsp_stream {
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
-      config.audio.channels = util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
-      config.audio.mask = util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
-      config.audio.packetDuration = util::from_view(args.at("x-nv-aqos.packetDuration"sv));
+      config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
+      config.audio.mask = (int) util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
+      config.audio.packetDuration = (int) util::from_view(args.at("x-nv-aqos.packetDuration"sv));
 
       config.audio.flags[audio::config_t::HIGH_QUALITY] =
         util::from_view(args.at("x-nv-audio.surround.AudioQuality"sv));
 
-      config.controlProtocolType = util::from_view(args.at("x-nv-general.useReliableUdp"sv));
-      config.packetsize = util::from_view(args.at("x-nv-video[0].packetSize"sv));
-      config.minRequiredFecPackets = util::from_view(args.at("x-nv-vqos[0].fec.minRequiredFecPackets"sv));
-      config.mlFeatureFlags = util::from_view(args.at("x-ml-general.featureFlags"sv));
-      config.audioQosType = util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
-      config.videoQosType = util::from_view(args.at("x-nv-vqos[0].qosTrafficType"sv));
-      config.encryptionFlagsEnabled = util::from_view(args.at("x-ss-general.encryptionEnabled"sv));
+      config.controlProtocolType = (int) util::from_view(args.at("x-nv-general.useReliableUdp"sv));
+      config.packetsize = (int) util::from_view(args.at("x-nv-video[0].packetSize"sv));
+      config.minRequiredFecPackets = (int) util::from_view(args.at("x-nv-vqos[0].fec.minRequiredFecPackets"sv));
+      config.mlFeatureFlags = (int) util::from_view(args.at("x-ml-general.featureFlags"sv));
+      config.audioQosType = (int) util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
+      config.videoQosType = (int) util::from_view(args.at("x-nv-vqos[0].qosTrafficType"sv));
+      config.encryptionFlagsEnabled = (uint32_t) util::from_view(args.at("x-ss-general.encryptionEnabled"sv));
 
       // Legacy clients use nvFeatureFlags to indicate support for audio encryption
       if (util::from_view(args.at("x-nv-general.featureFlags"sv)) & 0x20) {
         config.encryptionFlagsEnabled |= SS_ENC_AUDIO;
       }
 
-      config.monitor.height = util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
-      config.monitor.width = util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
-      config.monitor.framerate = util::from_view(args.at("x-nv-video[0].maxFPS"sv));
-      config.monitor.framerateX100 = util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
-      config.monitor.bitrate = util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
-      config.monitor.slicesPerFrame = util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
-      config.monitor.numRefFrames = util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
-      config.monitor.encoderCscMode = util::from_view(args.at("x-nv-video[0].encoderCscMode"sv));
-      config.monitor.videoFormat = util::from_view(args.at("x-nv-vqos[0].bitStreamFormat"sv));
-      config.monitor.dynamicRange = util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
-      config.monitor.chromaSamplingType = util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
-      config.monitor.enableIntraRefresh = util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
+      // Limit the packetsize to avoid fragmentation with clients that cannot configure this value
+      if (config::stream.packetsize && config::stream.packetsize < config.packetsize) {
+        if (config::stream.packetsize < config::PACKETSIZE_MIN || config::stream.packetsize > config::PACKETSIZE_MAX) {
+          BOOST_LOG(warning) << "packetsize range: ["sv << config::PACKETSIZE_MIN << "-"sv << config::PACKETSIZE_MAX
+                             << "] invalid value: "sv << config::stream.packetsize;
+        } else {
+          if (config::stream.packetsize < config::PACKETSIZE_SMALL) {
+            BOOST_LOG(info) << "packetsize is small < "sv << config::PACKETSIZE_SMALL << " bytes, reduce bitrate if the stream breaks"sv;
+          } else if (config::stream.packetsize > config::PACKETSIZE_LARGE) {
+            BOOST_LOG(info) << "packetsize is large > "sv << config::PACKETSIZE_LARGE << " bytes, jumbo frames may be used"sv;
+          }
+
+          BOOST_LOG(info) << "packetsize limit: "sv << config.packetsize << " -> "sv << config::stream.packetsize << " bytes"sv;
+          config.packetsize = config::stream.packetsize;
+        }
+      }
+
+      config.monitor.height = (int) util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
+      config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
+      config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
+      config.monitor.framerateX100 = (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
+      // Validate framerateX100 against framerate. Some clients (e.g. Moonlight Android) send the
+      // client display's refresh rate as clientRefreshRateX100, which may differ from the requested
+      // streaming framerate. Discard framerateX100 if the derived fps is not within 1% of framerate.
+      if (config.monitor.framerateX100 > 0) {
+        double fps_strict = config.monitor.framerateX100 / 100.0;
+        double ratio = fps_strict / config.monitor.framerate;
+        if (ratio < 0.99 || ratio > 1.01) {
+          config.monitor.framerateX100 = 0;
+        }
+      }
+      config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
+      config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
+      config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
+      config.monitor.encoderCscMode = (int) util::from_view(args.at("x-nv-video[0].encoderCscMode"sv));
+      config.monitor.videoFormat = (int) util::from_view(args.at("x-nv-vqos[0].bitStreamFormat"sv));
+      config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
+      config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
+      config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
 
       configuredBitrateKbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
     } catch (std::out_of_range &) {
@@ -1060,7 +1112,7 @@ namespace rtsp_stream {
       configuredBitrateKbps -= std::min((std::int64_t) 500, configuredBitrateKbps / 10);
 
       BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-      config.monitor.bitrate = configuredBitrateKbps;
+      config.monitor.bitrate = (int) configuredBitrateKbps;
     }
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
@@ -1114,6 +1166,7 @@ namespace rtsp_stream {
   }
 
   void start() {
+    platf::set_thread_name("rtsp");
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
 
     server.map("OPTIONS"sv, &cmd_option);
@@ -1131,6 +1184,7 @@ namespace rtsp_stream {
     }
 
     std::thread rtsp_thread {[&shutdown_event] {
+      platf::set_thread_name("rtsp::handler");
       auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
 
       while (!shutdown_event->peek()) {

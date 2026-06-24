@@ -61,8 +61,10 @@ namespace video {
   struct encoder_platform_formats_t {
     virtual ~encoder_platform_formats_t() = default;
     platf::mem_type_e dev_type;
-    platf::pix_fmt_e pix_fmt_8bit, pix_fmt_10bit;
-    platf::pix_fmt_e pix_fmt_yuv444_8bit, pix_fmt_yuv444_10bit;
+    platf::pix_fmt_e pix_fmt_8bit;
+    platf::pix_fmt_e pix_fmt_10bit;
+    platf::pix_fmt_e pix_fmt_yuv444_8bit;
+    platf::pix_fmt_e pix_fmt_yuv444_10bit;
   };
 
   struct encoder_platform_formats_avcodec: encoder_platform_formats_t {
@@ -93,10 +95,13 @@ namespace video {
       pix_fmt_yuv444_10bit = map_pix_fmt(avcodec_pix_fmt_yuv444_10bit);
     }
 
-    AVHWDeviceType avcodec_base_dev_type, avcodec_derived_dev_type;
+    AVHWDeviceType avcodec_base_dev_type;
+    AVHWDeviceType avcodec_derived_dev_type;
     AVPixelFormat avcodec_dev_pix_fmt;
-    AVPixelFormat avcodec_pix_fmt_8bit, avcodec_pix_fmt_10bit;
-    AVPixelFormat avcodec_pix_fmt_yuv444_8bit, avcodec_pix_fmt_yuv444_10bit;
+    AVPixelFormat avcodec_pix_fmt_8bit;
+    AVPixelFormat avcodec_pix_fmt_10bit;
+    AVPixelFormat avcodec_pix_fmt_yuv444_8bit;
+    AVPixelFormat avcodec_pix_fmt_yuv444_10bit;
 
     init_buffer_function_t init_avcodec_hardware_input_buffer;
   };
@@ -125,6 +130,7 @@ namespace video {
       REF_FRAMES_RESTRICT,  ///< Set maximum reference frames.
       DYNAMIC_RANGE,  ///< HDR support.
       YUV444,  ///< YUV 4:4:4 support.
+      DYNAMIC_RANGE_YUV444,  ///< YUV 4:4:4 HDR support.
       VUI_PARAMETERS,  ///< AMD encoder with VAAPI doesn't add VUI parameters to SPS.
       MAX_FLAGS  ///< Maximum number of flags.
     };
@@ -138,6 +144,7 @@ namespace video {
         _CONVERT(REF_FRAMES_RESTRICT);
         _CONVERT(DYNAMIC_RANGE);
         _CONVERT(YUV444);
+        _CONVERT(DYNAMIC_RANGE_YUV444);
         _CONVERT(VUI_PARAMETERS);
         _CONVERT(MAX_FLAGS);
       }
@@ -179,7 +186,11 @@ namespace video {
       std::bitset<MAX_FLAGS>::reference operator[](flag_e flag) {
         return capabilities[(std::size_t) flag];
       }
-    } av1, hevc, h264;
+    };
+
+    codec_t av1;
+    codec_t hevc;
+    codec_t h264;
 
     const codec_t &codec_from_config(const config_t &config) const {
       switch (config.videoFormat) {
@@ -220,6 +231,7 @@ namespace video {
 #ifdef _WIN32
   extern encoder_t amdvce;
   extern encoder_t quicksync;
+  extern encoder_t mediafoundation;
 #endif
 
 #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)

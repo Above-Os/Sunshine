@@ -3,6 +3,7 @@
  * @brief Definitions for video.
  */
 // standard includes
+#include <array>
 #include <atomic>
 #include <bitset>
 #include <list>
@@ -122,6 +123,7 @@ namespace video {
   util::Either<avcodec_buffer_t, int> vaapi_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
   util::Either<avcodec_buffer_t, int> cuda_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
   util::Either<avcodec_buffer_t, int> vt_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
+  util::Either<avcodec_buffer_t, int> vulkan_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *);
 
   class avcodec_software_encode_device_t: public platf::avcodec_encode_device_t {
   public:
@@ -300,6 +302,7 @@ namespace video {
     ALWAYS_REPROBE = 1 << 9,  ///< This is an encoder of last resort and we want to aggressively probe for a better one
     YUV444_SUPPORT = 1 << 10,  ///< Encoder may support 4:4:4 chroma sampling depending on hardware
     ASYNC_TEARDOWN = 1 << 11,  ///< Encoder supports async teardown on a different thread
+    FIXED_GOP_SIZE = 1 << 12,  ///< Use fixed small GOP size (encoder doesn't support on-demand IDR frames)
   };
 
   class avcodec_encode_session_t: public encode_session_t {
@@ -527,8 +530,8 @@ namespace video {
   #endif
       AV_PIX_FMT_NV12,
       AV_PIX_FMT_P010,
-      AV_PIX_FMT_NONE,
-      AV_PIX_FMT_NONE,
+      AV_PIX_FMT_YUV444P,
+      AV_PIX_FMT_YUV444P16,
   #ifdef _WIN32
       dxgi_init_avcodec_hardware_input_buffer
   #else
@@ -607,7 +610,7 @@ namespace video {
       {},  // Fallback options
       "h264_nvenc"s,
     },
-    PARALLEL_ENCODING
+    PARALLEL_ENCODING | YUV444_SUPPORT
   };
 #endif
 
@@ -825,6 +828,63 @@ namespace video {
     },
     PARALLEL_ENCODING
   };
+
+  encoder_t mediafoundation {
+    "mediafoundation"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+      AV_HWDEVICE_TYPE_D3D11VA,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_D3D11,
+      AV_PIX_FMT_NV12,  // SDR 4:2:0 8-bit (only format Qualcomm supports)
+      AV_PIX_FMT_NONE,  // No HDR - Qualcomm MF only supports 8-bit
+      AV_PIX_FMT_NONE,  // No YUV444 SDR
+      AV_PIX_FMT_NONE,  // No YUV444 HDR
+      dxgi_init_avcodec_hardware_input_buffer
+    ),
+    {
+      // Common options for AV1 - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "av1_mf"s,
+    },
+    {
+      // Common options for HEVC - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "hevc_mf"s,
+    },
+    {
+      // Common options for H.264 - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "h264_mf"s,
+    },
+    PARALLEL_ENCODING | FIXED_GOP_SIZE  // MF encoder doesn't support on-demand IDR frames
+  };
 #endif
 
   encoder_t software {
@@ -954,7 +1014,78 @@ namespace video {
     // RC buffer size will be set in platform code if supported
     LIMITED_GOP_SIZE | PARALLEL_ENCODING | NO_RC_BUF_LIMIT
   };
-#endif
+
+  #ifdef SUNSHINE_BUILD_VULKAN
+  encoder_t vulkan {
+    "vulkan"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+      AV_HWDEVICE_TYPE_VULKAN,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_VULKAN,
+      AV_PIX_FMT_NV12,
+      AV_PIX_FMT_P010,
+      AV_PIX_FMT_NONE,
+      AV_PIX_FMT_NONE,
+      vulkan_init_avcodec_hardware_input_buffer
+    ),
+    {
+      // AV1
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+        {"async_depth"s, 1},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "av1_vulkan"s,
+    },
+    {
+      // HEVC
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+        {"async_depth"s, 1},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "hevc_vulkan"s,
+    },
+    {
+      // H.264
+      {
+        {"idr_interval"s, std::numeric_limits<int>::max()},
+        {"tune"s, &config::video.vk.tune},
+        {"rc_mode"s, &config::video.vk.rc_mode},
+        {"units"s, 0},
+        {"usage"s, "stream"s},
+        {"content"s, "rendered"s},
+        {"async_depth"s, 1},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "h264_vulkan"s,
+    },
+    LIMITED_GOP_SIZE | PARALLEL_ENCODING
+  };
+  #endif  // SUNSHINE_BUILD_VULKAN
+#endif  // linux
 
 #ifdef __APPLE__
   encoder_t videotoolbox {
@@ -1003,12 +1134,16 @@ namespace video {
     },
     {
       // Common options
+      // Note: max_ref_frames is intentionally omitted for H.264 because
+      // VideoToolbox on Apple Silicon produces all-IDR output when
+      // ReferenceBufferCount=1 is set for H.264, causing massive bandwidth
+      // inflation (~3x) and frame drops. HEVC and AV1 are unaffected and
+      // retain max_ref_frames=1. See LizardByte/Sunshine#5013.
       {
         {"allow_sw"s, &config::video.vt.vt_allow_sw},
         {"require_sw"s, &config::video.vt.vt_require_sw},
         {"realtime"s, &config::video.vt.vt_realtime},
         {"prio_speed"s, 1},
-        {"max_ref_frames"s, 1},
       },
       {},  // SDR-specific options
       {},  // HDR-specific options
@@ -1020,7 +1155,7 @@ namespace video {
       },
       "h264_videotoolbox"s,
     },
-    DEFAULT
+    PARALLEL_ENCODING
   };
 #endif
 
@@ -1031,8 +1166,12 @@ namespace video {
 #ifdef _WIN32
     &quicksync,
     &amdvce,
+    &mediafoundation,
 #endif
 #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
+  #ifdef SUNSHINE_BUILD_VULKAN
+    &vulkan,
+  #endif
     &vaapi,
 #endif
 #ifdef __APPLE__
@@ -1253,6 +1392,7 @@ namespace video {
     };
 
     // Capture takes place on this thread
+    platf::set_thread_name("video::capture");
     platf::adjust_thread_priority(platf::thread_priority_e::critical);
 
     while (capture_ctx_queue->running()) {
@@ -1496,14 +1636,22 @@ namespace video {
       return nullptr;
     }
 
-    if (config.dynamicRange && !video_format[encoder_t::DYNAMIC_RANGE]) {
-      BOOST_LOG(error) << video_format.name << ": dynamic range not supported"sv;
-      return nullptr;
-    }
+    if (config.chromaSamplingType == 1) {
+      if (!video_format[encoder_t::YUV444]) {
+        BOOST_LOG(error) << video_format.name << ": YUV 4:4:4 not supported"sv;
+        return nullptr;
+      }
 
-    if (config.chromaSamplingType == 1 && !video_format[encoder_t::YUV444]) {
-      BOOST_LOG(error) << video_format.name << ": YUV 4:4:4 not supported"sv;
-      return nullptr;
+      if (config.dynamicRange && !video_format[encoder_t::DYNAMIC_RANGE_YUV444]) {
+        BOOST_LOG(error) << video_format.name << ": YUV 4:4:4 dynamic range not supported"sv;
+        return nullptr;
+      }
+
+    } else {
+      if (config.dynamicRange && !video_format[encoder_t::DYNAMIC_RANGE]) {
+        BOOST_LOG(error) << video_format.name << ": dynamic range not supported"sv;
+        return nullptr;
+      }
     }
 
     auto codec = avcodec_find_encoder_by_name(video_format.name.c_str());
@@ -1565,11 +1713,17 @@ namespace video {
       ctx->max_b_frames = 0;
 
       // Use an infinite GOP length since I-frames are generated on demand
-      ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
-                        std::numeric_limits<std::int16_t>::max() :
-                        std::numeric_limits<int>::max();
-
-      ctx->keyint_min = std::numeric_limits<int>::max();
+      // Exception: encoders with FIXED_GOP_SIZE flag don't support on-demand IDR
+      if (encoder.flags & FIXED_GOP_SIZE) {
+        // Fixed GOP for encoders that don't support on-demand IDR (e.g. Media Foundation)
+        ctx->gop_size = 120;  // ~2 seconds at 60 FPS - larger to reduce oversized IDR frame frequency
+        ctx->keyint_min = 120;
+      } else {
+        ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
+                          std::numeric_limits<std::int16_t>::max() :
+                          std::numeric_limits<int>::max();
+        ctx->keyint_min = std::numeric_limits<int>::max();
+      }
 
       // Some client decoders have limits on the number of reference frames
       if (config.numRefFrames) {
@@ -1907,9 +2061,9 @@ namespace video {
     });
 
     // set max frame time based on client-requested target framerate.
-    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target : config.framerate;
+    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target : (config.framerate / 2);
     std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
-    BOOST_LOG(info) << "Minimum FPS target set to ~"sv << (minimum_fps_target / 2) << "fps ("sv << max_frametime.count() * 2 << "ms)"sv;
+    BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
@@ -1977,6 +2131,10 @@ namespace video {
       }
 
       session->request_normal_frame();
+
+      // While streaming check to see if the mouse is present and enable Mouse Keys to force the cursor to appear
+      // This is useful for KVM switch scenarios where mouse may disappear during streaming
+      platf::enable_mouse_keys();
     }
   }
 
@@ -1988,6 +2146,18 @@ namespace video {
     float ht = config.height;
 
     auto scalar = std::fminf(wt / wd, ht / hd);
+
+    // we initialize scalar_tpcoords and logical dimensions to default values in case they are not set (non-KMS)
+    float scalar_tpcoords = 1.0f;
+    int display_env_logical_width = 0;
+    int display_env_logical_height = 0;
+    if (display->logical_width > 0 && display->logical_height > 0 && display->env_logical_width > 0 && display->env_logical_height > 0) {
+      float lwd = display->logical_width;
+      float lhd = display->logical_height;
+      scalar_tpcoords = std::fminf(wd / lwd, hd / lhd);
+      display_env_logical_width = display->env_logical_width;
+      display_env_logical_height = display->env_logical_height;
+    }
 
     auto w2 = scalar * wd;
     auto h2 = scalar * hd;
@@ -2007,6 +2177,9 @@ namespace video {
       offsetX,
       offsetY,
       1.0f / scalar,
+      scalar_tpcoords,
+      display_env_logical_width,
+      display_env_logical_height
     };
   }
 
@@ -2273,6 +2446,7 @@ namespace video {
     });
 
     // Encoding and capture takes place on this thread
+    platf::set_thread_name("video::capture_sync");
     platf::adjust_thread_priority(platf::thread_priority_e::high);
 
     std::vector<std::string> display_names;
@@ -2561,60 +2735,81 @@ namespace video {
 
     // Test HDR and YUV444 support
     {
-      // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
-      if (encoder.flags & YUV444_SUPPORT) {
-        config_t config_h264_yuv444 {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 1};
-        encoder.h264[encoder_t::YUV444] = disp->is_codec_supported(encoder.h264.name, config_h264_yuv444) &&
-                                          validate_config(disp, encoder, config_h264_yuv444) >= 0;
-      } else {
-        encoder.h264[encoder_t::YUV444] = false;
-      }
+      auto test_yuv444 = [&](auto &flag_map, auto video_format) {
+        const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 1, video_format, 0, 1};
 
-      const config_t generic_hdr_config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, 1, 1, 0};
-
-      // Reset the display since we're switching from SDR to HDR
-      reset_display(disp, encoder.platform_formats->dev_type, output_name, generic_hdr_config);
-      if (!disp) {
-        return false;
-      }
-
-      auto test_hdr_and_yuv444 = [&](auto &flag_map, auto video_format) {
-        auto config = generic_hdr_config;
-        config.videoFormat = video_format;
-
+        reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
+        if (!disp) {
+          return;
+        }
         if (!flag_map[encoder_t::PASSED]) {
           return;
         }
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
-        // Test 4:4:4 HDR first. If 4:4:4 is supported, 4:2:0 should also be supported.
-        config.chromaSamplingType = 1;
         if ((encoder.flags & YUV444_SUPPORT) &&
             disp->is_codec_supported(encoder_codec_name, config) &&
             validate_config(disp, encoder, config) >= 0) {
-          flag_map[encoder_t::DYNAMIC_RANGE] = true;
           flag_map[encoder_t::YUV444] = true;
-          return;
         } else {
           flag_map[encoder_t::YUV444] = false;
         }
+      };
 
-        // Test 4:2:0 HDR
-        config.chromaSamplingType = 0;
-        if (disp->is_codec_supported(encoder_codec_name, config) &&
-            validate_config(disp, encoder, config) >= 0) {
+      auto test_yuv420_hdr = [&](auto &flag_map, auto video_format) {
+        const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, video_format, 1, 0};
+
+        reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
+        if (!disp) {
+          return;
+        }
+        if (!flag_map[encoder_t::PASSED]) {
+          return;
+        }
+
+        auto encoder_codec_name = encoder.codec_from_config(config).name;
+
+        if (disp->is_codec_supported(encoder_codec_name, config) && validate_config(disp, encoder, config) >= 0) {
           flag_map[encoder_t::DYNAMIC_RANGE] = true;
         } else {
           flag_map[encoder_t::DYNAMIC_RANGE] = false;
         }
       };
 
+      auto test_yuv444_hdr = [&](auto &flag_map, auto video_format) {
+        const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, video_format, 1, 1};
+
+        reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
+        if (!disp) {
+          return;
+        }
+        if (!flag_map[encoder_t::PASSED]) {
+          return;
+        }
+
+        auto encoder_codec_name = encoder.codec_from_config(config).name;
+
+        if ((encoder.flags & YUV444_SUPPORT) &&
+            disp->is_codec_supported(encoder_codec_name, config) &&
+            validate_config(disp, encoder, config) >= 0) {
+          flag_map[encoder_t::DYNAMIC_RANGE_YUV444] = true;
+        } else {
+          flag_map[encoder_t::DYNAMIC_RANGE_YUV444] = false;
+        }
+      };
+
+      test_yuv444(encoder.h264, 0);
       // HDR is not supported with H.264. Don't bother even trying it.
       encoder.h264[encoder_t::DYNAMIC_RANGE] = false;
+      encoder.h264[encoder_t::DYNAMIC_RANGE_YUV444] = false;
 
-      test_hdr_and_yuv444(encoder.hevc, 1);
-      test_hdr_and_yuv444(encoder.av1, 2);
+      test_yuv444(encoder.hevc, 1);
+      test_yuv420_hdr(encoder.hevc, 1);
+      test_yuv444_hdr(encoder.hevc, 1);
+      test_yuv444(encoder.av1, 2);
+      test_yuv420_hdr(encoder.av1, 2);
+      test_yuv444_hdr(encoder.av1, 2);
     }
 
     encoder.h264[encoder_t::VUI_PARAMETERS] = encoder.h264[encoder_t::VUI_PARAMETERS] && !config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE];
@@ -2651,19 +2846,34 @@ namespace video {
     active_av1_mode = config::video.av1_mode;
     last_encoder_probe_supported_ref_frames_invalidation = false;
 
-    auto adjust_encoder_constraints = [&](encoder_t *encoder) {
+    auto adjust_encoder_constraints_hevc = [&](encoder_t *encoder) {
       // If we can't satisfy both the encoder and codec requirement, prefer the encoder over codec support
-      if (active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) {
+      if (active_hevc_mode == 5 && !encoder->hevc[encoder_t::DYNAMIC_RANGE] && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) {
+        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support HEVC Main10 Rext10_444 on this system"sv;
+        active_hevc_mode = 0;
+      } else if (active_hevc_mode == 4 && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) {
+        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support HEVC Rext10_444 on this system"sv;
+        active_hevc_mode = 0;
+      } else if (active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) {
         BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support HEVC Main10 on this system"sv;
         active_hevc_mode = 0;
       } else if (active_hevc_mode == 2 && !encoder->hevc[encoder_t::PASSED]) {
         BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support HEVC on this system"sv;
         active_hevc_mode = 0;
       }
+    };
 
-      if (active_av1_mode == 3 && !encoder->av1[encoder_t::DYNAMIC_RANGE]) {
-        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support AV1 Main10 on this system"sv;
+    auto adjust_encoder_constraints_av1 = [&](encoder_t *encoder) {
+      // If we can't satisfy both the encoder and codec requirement, prefer the encoder over codec support
+      if (active_av1_mode == 5 && !encoder->av1[encoder_t::DYNAMIC_RANGE] && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444]) {
+        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support AV1 Main10 Rext10_444 on this system"sv;
         active_av1_mode = 0;
+      } else if (active_hevc_mode == 4 && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444]) {
+        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support AV1 Rext10_444 on this system"sv;
+        active_hevc_mode = 0;
+      } else if (active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) {
+        BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support AV1 Main10 on this system"sv;
+        active_hevc_mode = 0;
       } else if (active_av1_mode == 2 && !encoder->av1[encoder_t::PASSED]) {
         BOOST_LOG(warning) << "Encoder ["sv << encoder->name << "] does not support AV1 on this system"sv;
         active_av1_mode = 0;
@@ -2683,7 +2893,8 @@ namespace video {
           }
 
           // We will return an encoder here even if it fails one of the codec requirements specified by the user
-          adjust_encoder_constraints(encoder);
+          adjust_encoder_constraints_hevc(encoder);
+          adjust_encoder_constraints_av1(encoder);
 
           chosen_encoder = encoder;
           break;
@@ -2713,6 +2924,20 @@ namespace video {
         // Skip it if it doesn't support the specified codec at all
         if ((active_hevc_mode >= 2 && !encoder->hevc[encoder_t::PASSED]) ||
             (active_av1_mode >= 2 && !encoder->av1[encoder_t::PASSED])) {
+          pos++;
+          continue;
+        }
+
+        // Skip it if it doesn't support HDR on the specified codec
+        if ((active_hevc_mode == 5 && !encoder->hevc[encoder_t::DYNAMIC_RANGE] && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) ||
+            (active_av1_mode == 5 && !encoder->av1[encoder_t::DYNAMIC_RANGE] && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
+          pos++;
+          continue;
+        }
+
+        // Skip it if it doesn't support HDR on the specified codec
+        if ((active_hevc_mode == 4 && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) ||
+            (active_av1_mode == 4 && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
           pos++;
           continue;
         }
@@ -2748,7 +2973,8 @@ namespace video {
         }
 
         // We will return an encoder here even if it fails one of the codec requirements specified by the user
-        adjust_encoder_constraints(encoder);
+        adjust_encoder_constraints_hevc(encoder);
+        adjust_encoder_constraints_av1(encoder);
 
         chosen_encoder = encoder;
         break;
@@ -2810,12 +3036,37 @@ namespace video {
       BOOST_LOG(info) << "Found AV1 encoder: "sv << encoder.av1.name << " ["sv << encoder.name << ']';
     }
 
+    // 2 - passed
+    // 3 - HDR yuv420
+    // 4 - HDR yuv444
+    // 5 - HDR yuv420 & HDR yuv444
+
     if (active_hevc_mode == 0) {
-      active_hevc_mode = encoder.hevc[encoder_t::PASSED] ? (encoder.hevc[encoder_t::DYNAMIC_RANGE] ? 3 : 2) : 1;
+      active_hevc_mode = 1;
+      if (encoder.hevc[encoder_t::PASSED]) {
+        active_hevc_mode = 2;
+        if (encoder.hevc[encoder_t::DYNAMIC_RANGE]) {
+          active_hevc_mode += 1;
+        }
+        if (encoder.hevc[encoder_t::DYNAMIC_RANGE_YUV444]) {
+          active_hevc_mode += 2;
+        }
+      }
+      BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_HEVC_MODE: "sv << active_hevc_mode;
     }
 
     if (active_av1_mode == 0) {
-      active_av1_mode = encoder.av1[encoder_t::PASSED] ? (encoder.av1[encoder_t::DYNAMIC_RANGE] ? 3 : 2) : 1;
+      active_av1_mode = 1;
+      if (encoder.av1[encoder_t::PASSED]) {
+        active_av1_mode = 2;
+        if (encoder.av1[encoder_t::DYNAMIC_RANGE]) {
+          active_av1_mode += 1;
+        }
+        if (encoder.av1[encoder_t::DYNAMIC_RANGE_YUV444]) {
+          active_av1_mode += 2;
+        }
+      }
+      BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_AV1_MODE: "sv << active_av1_mode;
     }
 
     return 0;
@@ -2836,9 +3087,9 @@ namespace video {
       return hw_device_buf;
     }
 
-    auto render_device = config::video.adapter_name.empty() ? nullptr : config::video.adapter_name.c_str();
+    auto render_device = platf::resolve_render_device();
 
-    auto status = av_hwdevice_ctx_create(&hw_device_buf, AV_HWDEVICE_TYPE_VAAPI, render_device, nullptr, 0);
+    auto status = av_hwdevice_ctx_create(&hw_device_buf, AV_HWDEVICE_TYPE_VAAPI, render_device.empty() ? nullptr : render_device.c_str(), nullptr, 0);
     if (status < 0) {
       char string[AV_ERROR_MAX_STRING_SIZE];
       BOOST_LOG(error) << "Failed to create a VAAPI device: "sv << av_make_error_string(string, AV_ERROR_MAX_STRING_SIZE, status);
@@ -2847,6 +3098,43 @@ namespace video {
 
     return hw_device_buf;
   }
+
+#ifdef SUNSHINE_BUILD_VULKAN
+  using vulkan_init_avcodec_hardware_input_buffer_fn = int (*)(platf::avcodec_encode_device_t *encode_device, AVBufferRef **hw_device_buf);
+
+  util::Either<avcodec_buffer_t, int> vulkan_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *encode_device) {
+    avcodec_buffer_t hw_device_buf;
+
+    if (encode_device && encode_device->data) {
+      if (((vulkan_init_avcodec_hardware_input_buffer_fn) encode_device->data)(encode_device, &hw_device_buf)) {
+        return -1;
+      }
+      return hw_device_buf;
+    }
+
+    // Try render device path first, auto-detecting the GPU with a connected display
+    auto render_device = platf::resolve_render_device();
+
+    auto status = av_hwdevice_ctx_create(&hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, render_device.c_str(), nullptr, 0);
+    if (status >= 0) {
+      BOOST_LOG(info) << "Using Vulkan device: "sv << render_device;
+      return hw_device_buf;
+    }
+
+    // Fallback: try device indices for multi-GPU systems
+    const std::array<const char *, 4> devices = {"1", "0", "2", "3"};
+    for (auto device : devices) {
+      status = av_hwdevice_ctx_create(&hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, device, nullptr, 0);
+      if (status >= 0) {
+        BOOST_LOG(info) << "Using Vulkan device index: "sv << device;
+        return hw_device_buf;
+      }
+    }
+
+    BOOST_LOG(error) << "Failed to create a Vulkan device"sv;
+    return -1;
+  }
+#endif
 
   util::Either<avcodec_buffer_t, int> cuda_init_avcodec_hardware_input_buffer(platf::avcodec_encode_device_t *encode_device) {
     avcodec_buffer_t hw_device_buf;
@@ -2945,6 +3233,10 @@ namespace video {
         return platf::mem_type_e::dxgi;
       case AV_HWDEVICE_TYPE_VAAPI:
         return platf::mem_type_e::vaapi;
+#ifdef SUNSHINE_BUILD_VULKAN
+      case AV_HWDEVICE_TYPE_VULKAN:
+        return platf::mem_type_e::vulkan;
+#endif
       case AV_HWDEVICE_TYPE_CUDA:
         return platf::mem_type_e::cuda;
       case AV_HWDEVICE_TYPE_NONE:
@@ -2972,6 +3264,10 @@ namespace video {
         return platf::pix_fmt_e::nv12;
       case AV_PIX_FMT_P010:
         return platf::pix_fmt_e::p010;
+      case AV_PIX_FMT_YUV444P:
+        return platf::pix_fmt_e::yuv444p;
+      case AV_PIX_FMT_YUV444P16:
+        return platf::pix_fmt_e::yuv444p16;
       default:
         return platf::pix_fmt_e::unknown;
     }
