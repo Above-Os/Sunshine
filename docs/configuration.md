@@ -1502,6 +1502,46 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### bind_address
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Set the IP address to bind Sunshine to. This is useful when you have multiple network interfaces
+            and want to restrict Sunshine to a specific one. If not set, Sunshine will bind to all available
+            interfaces (0.0.0.0 for IPv4 or :: for IPv6).
+            <br><br>
+            <strong>Note:</strong> The address must be valid for the system and must match the address family
+            being used. When using IPv6, you can specify an IPv6 address even with address_family set to "both".
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            (empty - bind to all interfaces)
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example (IPv4)</td>
+        <td colspan="2">@code{}
+            bind_address = 192.168.1.100
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example (IPv6)</td>
+        <td colspan="2">@code{}
+            bind_address = 2001:db8::1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example (Loopback)</td>
+        <td colspan="2">@code{}
+            bind_address = 127.0.0.1
+            @endcode</td>
+    </tr>
+</table>
+
 ### port
 
 <table>
@@ -1563,6 +1603,35 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>wan</td>
         <td>Anyone may access the web ui</td>
+    </tr>
+</table>
+
+### csrf_allowed_origins
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Comma-separated list of additional allowed origins for CSRF protection. These origins will be
+            appended to the default allowed origins (localhost variants and the configured web UI port).
+            Requests from allowed origins can access state-changing API endpoints without CSRF tokens.
+            <br><br>
+            @attention{Only add origins you trust. Each origin must be a complete URL prefix
+            including protocol and host (e.g., https://example.com). Port numbers are optional.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            (empty - uses built-in defaults: https://localhost, https://127.0.0.1, https://[::1],
+            with configured UI port variants)
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            csrf_allowed_origins = https://myapp.local,https://custom.domain.com
+            @endcode</td>
     </tr>
 </table>
 
@@ -1680,6 +1749,67 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             ping_timeout = 10000
+            @endcode</td>
+    </tr>
+</table>
+
+### packetsize
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Limit the packetsize to avoid fragmentation on a low MTU link.
+            @note{This helps avoid packet loss and micro-stutter on a layer 2 VPN with
+            clients that cannot configure this value, e.g. Moonlight for Android/iOS.
+            }
+            @tip{To discover the optimal value:
+            <ul>
+                <li>Send ping to the server with don't fragment flag (DF)</li>
+                <li>Find the size of the largest replay, and subtract 16</li>
+                <li>Monitor the traffic to ensure no fragmentation</li>
+            </ul>
+            If using a VPN tunnel:
+            <ul>
+                <li>Set MTU on the TUN/TAP interface, and</li>
+                <li>Ensure no fragmentation both inside and outside the tunnel</li>
+                <li>Max UDP size = MTU size - 28</li>
+                <li>`packetsize` = max UDP size - 16</li>
+                <li>Monitor the traffic to ensure no fragmentation</li>
+            </ul>
+            Sample calculation for OpenVPN layer 2, using IPv4:
+            <ul>
+                <li>1428 bytes for max ICMP/UDP size outside the tunnel</li>
+                <li>Subtract the OpenVPN overhead: 24 bytes (may vary)</li>
+                <li>1404 bytes for Ethernet inside the tunnel</li>
+                <li>Subtract the Ethernet header: 14 bytes</li>
+                <li>1390 bytes for MTU inside the tunnel</li>
+                <li>Subtract the IPv4 header: 20 bytes</li>
+                <li>Subtract the UDP header: 8 bytes</li>
+                <li>1362 bytes for UDP payload</li>
+                <li>Subtract: 16 bytes</li>
+                <li>1346 bytes for `packetsize`</li>
+            </ul>
+            }
+            @warning{Reduce the bitrate when using low values.
+            Values larger than 1456 require jumbo frames.
+            }
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0, 200-65535</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            packetsize = 1346
             @endcode</td>
     </tr>
 </table>
@@ -2033,6 +2163,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @note{Applies to Linux only.}</td>
     </tr>
     <tr>
+        <td>kwin</td>
+        <td>Capture with KDE/KWin Wayland compositor via KDE screencasting.
+            @note{Applies to Linux only.}</td>
+    </tr>
+    <tr>
         <td>x11</td>
         <td>Uses XCB. This is the slowest and most CPU intensive so should be avoided if possible.
             @note{Applies to FreeBSD and Linux only.}</td>
@@ -2085,6 +2220,11 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>vaapi</td>
         <td>Use VA-API (AMD, Intel)</td>
+    </tr>
+    <tr>
+        <td>vulkan</td>
+        <td>Use Vulkan encoder (AMD, Intel, NVIDIA).
+            @note{Applies to Linux only.}</td>
     </tr>
     <tr>
         <td>software</td>
@@ -2275,6 +2415,46 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">@code{}
             nvenc_realtime_hags = enabled
             @endcode</td>
+    </tr>
+</table>
+
+### nvenc_split_encode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Split the encoding of each video frame over multiple NVENC hardware units.
+            Significantly reduces encoding latency with a marginal compression efficiency penalty.
+            This option is ignored if your GPU has a singular NVENC unit.
+            @note{This option only applies when using NVENC [encoder](#encoder) with HEVC or AV1.}
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            driver_decides
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_split_encode = driver_decides
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>disabled</td>
+        <td>Disabled</td>
+    </tr>
+    <tr>
+        <td>driver_decides</td>
+        <td>The NVIDIA driver will automatically enable split frame encoding when the following conditions are met: 2+ NVENC units, resolution is at least 4K, and the preset is P1-P4.</td>
+    </tr>
+    <tr>
+        <td>enabled</td>
+        <td>Enabled</td>
     </tr>
 </table>
 
@@ -2848,6 +3028,101 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">@code{}
             vaapi_strict_rc_buffer = enabled
             @endcode</td>
+    </tr>
+</table>
+
+## Vulkan Encoder
+
+### vk_tune
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Encoder tuning preset. Low latency modes reduce encoding delay at the cost of quality.
+            @note{This option only applies when using Vulkan [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            2
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vk_tune = 1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Options</td>
+        <td>0 (default)</td>
+        <td>Let the driver decide</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>1 (hq)</td>
+        <td>High Quality</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>2 (ll)</td>
+        <td>Low Latency</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>3 (ull)</td>
+        <td>Ultra Low Latency</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>4 (lossless)</td>
+        <td>Lossless</td>
+    </tr>
+</table>
+
+### vk_rc_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Rate control mode for encoding. Auto lets the driver decide.
+            @note{This option only applies when using Vulkan [encoder](#encoder).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            2
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vk_rc_mode = 4
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Options</td>
+        <td>0</td>
+        <td>Auto (driver decides)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>1</td>
+        <td>CQP (Constant QP)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>2</td>
+        <td>CBR (Constant Bitrate)</td>
+    </tr>
+    <tr>
+        <td></td>
+        <td>4</td>
+        <td>VBR (Variable Bitrate)</td>
     </tr>
 </table>
 

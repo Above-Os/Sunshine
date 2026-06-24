@@ -14,16 +14,18 @@
     #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.ico"
     #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.ico"
   #elif defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
-    #define TRAY_ICON SUNSHINE_TRAY_PREFIX "-tray"
-    #define TRAY_ICON_PLAYING SUNSHINE_TRAY_PREFIX "-playing"
-    #define TRAY_ICON_PAUSING SUNSHINE_TRAY_PREFIX "-pausing"
-    #define TRAY_ICON_LOCKED SUNSHINE_TRAY_PREFIX "-locked"
+    #define TRAY_ICON WEB_DIR "images/logo-sunshine.svg"
+    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.svg"
+    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.svg"
+    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
   #elif defined(__APPLE__) || defined(__MACH__)
     #define TRAY_ICON WEB_DIR "images/logo-sunshine-16.png"
     #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing-16.png"
     #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing-16.png"
     #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked-16.png"
+    #include <CoreFoundation/CoreFoundation.h>
     #include <dispatch/dispatch.h>
+    #include <unordered_map>
   #endif
 
   // standard includes
@@ -37,7 +39,7 @@
   // lib includes
   #include <boost/filesystem.hpp>
   #include <boost/process/v1/environment.hpp>
-  #include <tray/src/tray.h>
+  #include <tray.h>
 
   // local includes
   #include "confighttp.h"
@@ -69,6 +71,33 @@ namespace system_tray {
   void tray_donate_paypal_cb([[maybe_unused]] struct tray_menu *item) {
     platf::open_url("https://www.paypal.com/paypalme/ReenigneArcher");
   }
+
+  #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
+  /**
+   * @brief Forwards Qt log messages to Sunshine's BOOST_LOG logger.
+   * @param level Log level: 0=debug, 1=info, 2=warning, 3=error.
+   * @param msg The message string from Qt.
+   */
+  static void qt_log_to_boost(int level, const char *msg) {
+    if (msg == nullptr) {
+      return;
+    }
+    switch (level) {
+      case 0:
+        BOOST_LOG(debug) << "Qt: " << msg;
+        break;
+      case 1:
+        BOOST_LOG(info) << "Qt: " << msg;
+        break;
+      case 2:
+        BOOST_LOG(warning) << "Qt: " << msg;
+        break;
+      default:
+        BOOST_LOG(error) << "Qt: " << msg;
+        break;
+    }
+  }
+  #endif
 
   void tray_reset_display_device_config_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Resetting display device config from system tray"sv;
@@ -126,6 +155,58 @@ namespace system_tray {
     .iconPathCount = 4,
     .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING},
   };
+
+  const char *GetResourcePath(const char *relativePath) {
+  #ifdef __APPLE__
+    if (!relativePath || !*relativePath) {
+      return nullptr;
+    }
+
+    // Simple cache ensures our string pointers live forever
+    static std::unordered_map<std::string, std::string> g_cache;
+    auto search = g_cache.find(relativePath);
+    if (search != g_cache.end()) {
+      return search->second.c_str();
+    }
+
+    // If we're running from an .app bundle, get the internal Resources dir
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if (!bundle) {
+      return relativePath;
+    }
+
+    CFURLRef resourcesURL = CFBundleCopyResourcesDirectoryURL(bundle);
+    if (!resourcesURL) {
+      return relativePath;
+    }
+
+    char resourcesPath[PATH_MAX];
+    bool ok = CFURLGetFileSystemRepresentation(
+      resourcesURL,
+      true,
+      reinterpret_cast<UInt8 *>(resourcesPath),
+      sizeof(resourcesPath)
+    );
+    CFRelease(resourcesURL);
+    if (!ok) {
+      return relativePath;
+    }
+
+    std::string full;
+    if (relativePath && relativePath[0] == '/') {
+      full = relativePath;
+    } else {
+      full = std::string(resourcesPath) + "/" + relativePath;
+    }
+
+    BOOST_LOG(debug) << "System Tray: using " << full << " for icon path";
+
+    auto [it, inserted] = g_cache.emplace(relativePath, std::move(full));
+    return it->second.c_str();
+  #else
+    return relativePath;
+  #endif
+  }
 
   int init_tray() {
   #ifdef _WIN32
@@ -189,6 +270,22 @@ namespace system_tray {
       Sleep(1000);
     }
   #endif
+
+  #ifdef __APPLE__
+    // if these icon paths are relative, resolve to internal .app Resources path
+    tray.allIconPaths[0] = GetResourcePath(TRAY_ICON);
+    tray.allIconPaths[1] = GetResourcePath(TRAY_ICON_LOCKED);
+    tray.allIconPaths[2] = GetResourcePath(TRAY_ICON_PLAYING);
+    tray.allIconPaths[3] = GetResourcePath(TRAY_ICON_PAUSING);
+
+    tray.icon = tray.allIconPaths[0];
+  #endif
+
+  #if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
+    tray_set_log_callback(qt_log_to_boost);
+  #endif
+
+    tray_set_app_info(PROJECT_NAME, PROJECT_NAME, PROJECT_FQDN);
 
     if (tray_init(&tray) < 0) {
       BOOST_LOG(warning) << "Failed to create system tray"sv;
@@ -305,6 +402,7 @@ namespace system_tray {
 
   // Threading functions available on all platforms
   static void tray_thread_worker() {
+    platf::set_thread_name("system_tray");
     BOOST_LOG(info) << "System tray thread started"sv;
 
     // Initialize the tray in this thread

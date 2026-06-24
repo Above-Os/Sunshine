@@ -3,8 +3,13 @@
 # platforms: linux/amd64,linux/arm64/v8
 # platforms_pr: linux/amd64
 # no-cache-filters: sunshine-base,artifacts,sunshine
+<<<<<<<< HEAD:docker/debian-trixie.dockerfile
 ARG BASE=debian
 ARG TAG=trixie
+========
+ARG BASE=ubuntu
+ARG TAG=26.04
+>>>>>>>> v2026.619.155209:docker/ubuntu-26.04.dockerfile
 FROM ${BASE}:${TAG} AS sunshine-base
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,10 +18,16 @@ FROM sunshine-base AS sunshine-deps
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+<<<<<<<< HEAD:docker/debian-trixie.dockerfile
 # Copy only the build script and necessary files first for better layer caching
 WORKDIR /build/sunshine/
 COPY --link scripts/linux_build.sh ./scripts/linux_build.sh
 COPY --link packaging/linux/patches/ ./packaging/linux/patches/
+========
+# Copy only the build script first for better layer caching
+WORKDIR /build/sunshine/
+COPY --link scripts/linux_build.sh ./scripts/linux_build.sh
+>>>>>>>> v2026.619.155209:docker/ubuntu-26.04.dockerfile
 
 # Install dependencies first - this layer will be cached
 RUN <<_DEPS
@@ -25,7 +36,10 @@ set -e
 chmod +x ./scripts/linux_build.sh
 ./scripts/linux_build.sh \
   --step=deps \
+<<<<<<<< HEAD:docker/debian-trixie.dockerfile
   --cuda-patches \
+========
+>>>>>>>> v2026.619.155209:docker/ubuntu-26.04.dockerfile
   --sudo-off
 apt-get clean
 rm -rf /var/lib/apt/lists/*
@@ -107,9 +121,9 @@ EXPOSE 48010
 EXPOSE 47998-48000/udp
 
 # setup user
-ARG PGID=1000
+ARG PGID=1001
 ENV PGID=${PGID}
-ARG PUID=1000
+ARG PUID=1001
 ENV PUID=${PUID}
 ENV TZ="UTC"
 ARG UNAME=lizard
