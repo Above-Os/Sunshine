@@ -1,0 +1,263 @@
+---
+name: CI Docker
+permissions: {}
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  github-env:
+    name: GitHub Env Debug
+    permissions:
+      contents: read
+    uses: LizardByte/.github/.github/workflows/__call-github-env.yml@master
+
+  release-setup:
+    name: Release Setup
+    outputs:
+      publish_release: ${{ steps.release-setup.outputs.publish_release }}
+      release_body: ${{ steps.release-setup.outputs.release_body }}
+      release_commit: ${{ steps.release-setup.outputs.release_commit }}
+      release_generate_release_notes: ${{ steps.release-setup.outputs.release_generate_release_notes }}
+      release_tag: ${{ steps.release-setup.outputs.release_tag }}
+      release_version: ${{ steps.release-setup.outputs.release_version }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Release Setup
+        id: release-setup
+        uses: LizardByte/actions/actions/release_setup@200eaeb897a2b065a65cb6f16b41077432007490  # v2026.605.34721
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  check_dockerfiles:
+    name: Check Dockerfiles
+    needs: release-setup
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Find dockerfiles
+        id: find
+        run: |
+          dockerfiles=$(find . -type f -iname "Dockerfile" -o -iname "debian-trixie.dockerfile")
+
+          echo "found dockerfiles: ${dockerfiles}"
+
+          # shellcheck disable=SC2086  # do not quote to keep this as a single line
+          echo dockerfiles=${dockerfiles} >> "${GITHUB_OUTPUT}"
+
+          MATRIX_COMBINATIONS=""
+          for FILE in ${dockerfiles}; do
+            # extract tag from file name
+            tag=$(echo "${FILE}" | sed -r -z -e 's/(\.\/)*.*\/(Dockerfile)/None/gm')
+            if [[ "${tag}" == "None" ]]; then
+              MATRIX_COMBINATIONS="${MATRIX_COMBINATIONS} {\"dockerfile\": \"${FILE}\"},"
+            else
+              tag=$(echo "${FILE}" | sed -r -z -e 's/(\.\/)*.*\/(.+)(\.dockerfile)/-\2/gm')
+              MATRIX_COMBINATIONS="${MATRIX_COMBINATIONS} {\"dockerfile\": \"${FILE}\", \"tag\": \"${tag}\"},"
+            fi
+          done
+
+          # removes the last character (i.e. comma)
+          MATRIX_COMBINATIONS=${MATRIX_COMBINATIONS::-1}
+
+          # setup matrix for later jobs
+          matrix=$( (
+            echo "{ \"include\": [${MATRIX_COMBINATIONS}] }"
+          ) | jq -c .)
+
+          echo "${matrix}"
+          echo "${matrix}" | jq .
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
+      - name: Additional Outputs
+        id: additional_outputs
+        run: |
+          # set outputs for later jobs
+          REPOSITORY="${{ github.repository }}"
+          BASE_TAG=$(echo ${REPOSITORY} | tr '[:upper:]' '[:lower:]')
+          echo "base_tag=${BASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+    outputs:
+      base_tag: ${{ steps.additional_outputs.outputs.base_tag }}
+      dockerfiles: ${{ steps.find.outputs.dockerfiles }}
+      matrix: ${{ steps.find.outputs.matrix }}
+
+  docker:
+    name: Docker${{ matrix.tag }}
+    if: needs.check_dockerfiles.outputs.dockerfiles
+    needs:
+      - check_dockerfiles
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    environment:
+      name: >-
+        ${{
+          inputs.publish_release == 'true' &&
+          format('docker{0}', matrix.tag) ||
+          null
+        }}
+      url: >-
+        ${{
+          inputs.publish_release == 'true' &&
+          format('https://hub.docker.com/r/{0}/tags?name={1}',
+            needs.check_dockerfiles.outputs.base_tag, matrix.tag) ||
+          null
+        }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.check_dockerfiles.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          submodules: recursive
+
+      - name: Prepare
+        id: prepare
+        env:
+          BRANCH: ${{ github.ref }}
+          COMMIT: ${{ needs.release-setup.outputs.release_commit }}
+          NEW_TAG: ${{ steps.release-setup.outputs.release_tag }}
+          GH_EVENT_REPOSITORY_CLONE_URL: ${{ github.event.repository.clone_url }}
+        shell: bash
+        run: |
+          # get variables
+          branch="${BRANCH:-master}"
+          commit="${COMMIT:-${GITHUB_SHA}}"
+          clone_url="${GH_EVENT_REPOSITORY_CLONE_URL}"
+
+          push=false
+          if [ "${GITHUB_EVENT_NAME}" == "push" ]; then
+            echo "This is a PUSH event"
+            branch="${GITHUB_REF_NAME}"
+            push=true
+          fi
+
+          # setup the tags
+          BASE_TAG='beclab/sunshine'
+
+          TAGS="${BASE_TAG}:${commit:0:7}${{ matrix.tag }},${BASE_TAG}:${commit:0:7}${{ matrix.tag }}"
+
+          if [[ "${push}" == true ]]; then
+            TAGS="${TAGS},${BASE_TAG}:latest${{ matrix.tag }},${BASE_TAG}:latest${{ matrix.tag }}"
+            TAGS="${TAGS},${BASE_TAG}:master${{ matrix.tag }},${BASE_TAG}:master${{ matrix.tag }}"
+          else
+            TAGS="${TAGS},${BASE_TAG}:test${{ matrix.tag }},${BASE_TAG}:test${{ matrix.tag }}"
+          fi
+
+          if [[ "${NEW_TAG}" != "" ]]; then
+            TAGS="${TAGS},${BASE_TAG}:${NEW_TAG}${{ matrix.tag }},${BASE_TAG}:${NEW_TAG}${{ matrix.tag }}"
+          fi
+
+          # parse custom directives out of dockerfile
+          # try to get the platforms from the dockerfile custom directive, i.e. `# platforms: xxx,yyy`
+          # directives for PR event, i.e. not push event
+          if [ "${GITHUB_EVENT_NAME}" == "pull_request" ]; then
+            while read -r line; do
+              if [[ $line == "# platforms_pr: "* && $PLATFORMS == "" ]]; then
+                # echo the line and use `sed` to remove the custom directive
+                PLATFORMS=$(echo -e "$line" | sed 's/# platforms_pr: //')
+              elif [[ $PLATFORMS != "" ]]; then
+                # break while loop once all custom "PR" event directives are found
+                break
+              fi
+            done <"${{ matrix.dockerfile }}"
+          fi
+          # directives for all events... above directives will not be parsed if they were already found
+          while read -r line; do
+            if [[ $line == "# platforms: "* && $PLATFORMS == "" ]]; then
+              # echo the line and use `sed` to remove the custom directive
+              PLATFORMS=$(echo -e "$line" | sed 's/# platforms: //')
+            elif [[ $line == "# artifacts: "* && $ARTIFACTS == "" ]]; then
+              # echo the line and use `sed` to remove the custom directive
+              ARTIFACTS=$(echo -e "$line" | sed 's/# artifacts: //')
+            elif [[ $line == "# no-cache-filters: "* && $NO_CACHE_FILTERS == "" ]]; then
+              # echo the line and use `sed` to remove the custom directive
+              NO_CACHE_FILTERS=$(echo -e "$line" | sed 's/# no-cache-filters: //')
+            elif [[ $PLATFORMS != "" && $ARTIFACTS != "" && $NO_CACHE_FILTERS != "" ]]; then
+              # break while loop once all custom directives are found
+              break
+            fi
+          done <"${{ matrix.dockerfile }}"
+          # if PLATFORMS is blank, fall back to the legacy method of reading from the `.docker_platforms` file
+          if [[ $PLATFORMS == "" ]]; then
+            # read the platforms from `.docker_platforms`
+            PLATFORMS=$(<.docker_platforms)
+          fi
+          # if PLATFORMS is still blank, fall back to `linux/amd64`
+          if [[ $PLATFORMS == "" ]]; then
+            PLATFORMS="linux/amd64"
+          fi
+
+          {
+            echo "branch=${branch}";
+            echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')";
+            echo "clone_url=${clone_url}";
+            echo "artifacts=${ARTIFACTS}";
+            echo "no_cache_filters=${NO_CACHE_FILTERS}";
+            echo "platforms=${PLATFORMS}";
+            echo "tags=${TAGS}";
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set Up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      - name: Cache Docker Layers
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: /tmp/.buildx-cache
+          key: Docker-buildx${{ matrix.tag }}-${{ github.sha }}
+          restore-keys: |
+            Docker-buildx${{ matrix.tag }}-
+
+      - name: Log in to Docker Hub
+        if: needs.release-setup.outputs.publish_release == 'true'  # PRs do not have access to secrets
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASS }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        with:
+          context: ./
+          file: ${{ matrix.dockerfile }}
+          push: ${{ needs.release-setup.outputs.publish_release }}
+          platforms: ${{ steps.prepare.outputs.platforms }}
+          build-args: |
+            BRANCH=${{ steps.prepare.outputs.branch }}
+            BUILD_DATE=${{ steps.prepare.outputs.build_date }}
+            BUILD_VERSION=${{ needs.release-setup.outputs.release_version }}
+            COMMIT=${{ needs.release-setup.outputs.release_commit }}
+            CLONE_URL=${{ steps.prepare.outputs.clone_url }}
+            RELEASE=${{ needs.release-setup.outputs.publish_release }}
+          tags: ${{ steps.prepare.outputs.tags }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+          no-cache-filters: ${{ steps.prepare.outputs.no_cache_filters }}
+          outputs: ${{ steps.prepare.outputs.artifacts == 'true' && 'type=local,dest=image' || '' }}
+
