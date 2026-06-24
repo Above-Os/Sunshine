@@ -1143,29 +1143,7 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the list of paired clients.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   *
-   * @api_examples{/api/clients/list| GET| null}
-   */
-  void getClients(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    const nlohmann::json named_certs = nvhttp::get_all_clients();
-
-    nlohmann::json output_tree;
-    output_tree["named_certs"] = named_certs;
-    output_tree["status"] = true;
-    send_response(response, output_tree);
-  }
-
-  /**
-   * @brief Unpair a client.
+   * @brief Upload a cover image.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    * The body for the post request should be JSON serialized in the following format:
