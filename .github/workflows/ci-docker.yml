@@ -112,13 +112,13 @@ jobs:
     environment:
       name: >-
         ${{
-          inputs.publish_release == 'true' &&
+          needs.release-setup.outputs.publish_release == 'true' &&
           format('docker{0}', matrix.tag) ||
           null
         }}
       url: >-
         ${{
-          inputs.publish_release == 'true' &&
+          needs.release-setup.outputs.publish_release == 'true' &&
           format('https://hub.docker.com/r/{0}/tags?name={1}',
             needs.check_dockerfiles.outputs.base_tag, matrix.tag) ||
           null
