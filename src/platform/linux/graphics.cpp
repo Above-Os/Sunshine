@@ -4,6 +4,8 @@
  */
 // standard includes
 #include <fcntl.h>
+#include <future>
+#include <stdexcept>
 
 // local includes
 #include "graphics.h"
@@ -24,25 +26,47 @@ extern "C" {
 // There aren't that many DRM_FORMAT I need to use, so define them here
 //
 // They aren't likely to change any time soon.
+/**
+ * @def fourcc_code(a, b, c, d)
+ * @brief Macro for fourcc code.
+ */
 #define fourcc_code(a, b, c, d) ((std::uint32_t) (a) | ((std::uint32_t) (b) << 8) | ((std::uint32_t) (c) << 16) | ((std::uint32_t) (d) << 24))
+/**
+ * @def fourcc_mod_code(vendor, val)
+ * @brief Macro for fourcc mod code.
+ */
 #define fourcc_mod_code(vendor, val) ((((uint64_t) vendor) << 56) | ((val) & 0x00ffffffffffffffULL))
+/**
+ * @def DRM_FORMAT_MOD_INVALID
+ * @brief Macro for DRM FORMAT MOD INVALID.
+ */
 #define DRM_FORMAT_MOD_INVALID fourcc_mod_code(0, ((1ULL << 56) - 1))
 
 #if !defined(SUNSHINE_SHADERS_DIR)  // for testing this needs to be defined in cmake as we don't do an install
+  /**
+   * @def SUNSHINE_SHADERS_DIR
+   * @brief Macro for SUNSHINE SHADERS DIR.
+   */
   #define SUNSHINE_SHADERS_DIR SUNSHINE_ASSETS_DIR "/shaders/opengl"
 #endif
 
 using namespace std::literals;
 
 namespace gl {
-  GladGLContext ctx;
+  GladGLContext ctx;  ///< Loaded OpenGL function table for the active context.
 
   static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC egl_image_target_texture_2d_fn = nullptr;
 
+  /**
+   * @brief Bind an EGL image to the current OpenGL texture target.
+   */
   PFNGLEGLIMAGETARGETTEXTURE2DOESPROC egl_image_target_texture_2d() {
     return egl_image_target_texture_2d_fn;
   }
 
+  /**
+   * @brief Drain and log pending OpenGL errors.
+   */
   void drain_errors(const std::string_view &prefix) {
     GLenum err;
     while ((err = ctx.GetError()) != GL_NO_ERROR) {
@@ -275,9 +299,12 @@ namespace gl {
 }  // namespace gl
 
 namespace gbm {
-  device_destroy_fn device_destroy;
-  create_device_fn create_device;
+  device_destroy_fn device_destroy;  ///< Device destroy.
+  create_device_fn create_device;  ///< Create device.
 
+  /**
+   * @brief Load GBM symbols required for EGL device creation.
+   */
   int init() {
     static void *handle {nullptr};
     static bool funcs_loaded = false;
@@ -309,13 +336,160 @@ namespace gbm {
 
 namespace egl {
 
+  namespace {  // Keep privileged implementation details anonymous/local to this translation unit
+
+#if !defined(__FreeBSD__)
+    /**
+     * @brief Temporarily owns CAP_SYS_NICE while creating EGL contexts.
+     */
+    class cap_sys_nice {
+    public:
+      static bool verify_cap_sys_nice() {
+        cap_t caps = cap_get_proc();
+        cap_value_t sys_nice = CAP_SYS_NICE;
+        cap_flag_value_t value;
+        cap_get_flag(caps, sys_nice, CAP_EFFECTIVE, &value);
+        cap_free(caps);
+
+        if (value != CAP_SET) {
+          BOOST_LOG(debug) << "Failed to verify CAP_SYS_NICE effective capability"sv;
+          return false;
+        }
+
+        return true;
+      }
+
+      cap_sys_nice() {
+        caps = cap_get_proc();
+
+        cap_value_t sys_nice = CAP_SYS_NICE;
+        if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_SET) || cap_set_proc(caps)) {
+          BOOST_LOG(debug) << "Failed to gain CAP_SYS_NICE";
+        }
+      }
+
+      ~cap_sys_nice() {
+        cap_value_t sys_nice = CAP_SYS_NICE;
+        if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_CLEAR) || cap_set_proc(caps)) {
+          BOOST_LOG(debug) << "Failed to drop CAP_SYS_NICE";
+        }
+        cap_free(caps);
+      }
+
+      cap_t caps;  ///< Caps
+    };
+#endif
+
+    /**
+     * @brief Reports that the privileged EGL worker rejected a task.
+     */
+    class privileged_egl_worker_stopped final: public std::runtime_error {
+    public:
+      using std::runtime_error::runtime_error;  ///< Inherit standard runtime error constructors.
+    };
+
+    class privileged_egl_worker {
+    public:
+      static void ensure_started() {
+        instance();
+      }
+
+      static EGLContext eglCreateContext_privileged(EGLDisplay display, EGLConfig config, EGLContext share_context, EGLint const *attrib_list, bool &nice_warning) {
+        try {
+          return instance().run([display, config, share_context, attrib_list, &nice_warning] {
+            nice_warning = false;
+#if !defined(__FreeBSD__)
+            nice_warning = !egl::cap_sys_nice::verify_cap_sys_nice();
+#endif
+
+            if (!eglBindAPI(EGL_OPENGL_API)) {
+              BOOST_LOG(error) << "Couldn't bind API in privileged thread: ["sv << util::hex(eglGetError()).to_string_view() << ']';
+              return EGL_NO_CONTEXT;
+            }
+            EGLContext privileged_ctx = eglCreateContext(display, config, share_context, attrib_list);
+            if (privileged_ctx == EGL_NO_CONTEXT) {
+              BOOST_LOG(error) << "Couldn't create EGL context in privileged thread: ["sv << util::hex(eglGetError()).to_string_view() << ']';
+            }
+            return privileged_ctx;
+          });
+        } catch (const privileged_egl_worker_stopped &e) {
+          BOOST_LOG(error) << "Couldn't execute privileged EGL context creation: "sv << e.what();
+          return EGL_NO_CONTEXT;
+        }
+      }
+
+    private:
+      static privileged_egl_worker &instance() {
+        static privileged_egl_worker w;
+        return w;
+      }
+
+      privileged_egl_worker():
+          thread_ {[this] {
+            sigset_t all;
+            sigfillset(&all);
+            if (pthread_sigmask(SIG_BLOCK, &all, nullptr) != 0) {
+              BOOST_LOG(error) << "Failed to block signals in egl_worker"sv;
+              queue_.stop();
+              return;
+            }
+
+            platf::set_thread_name("egl_worker");
+            for (;;) {
+              auto task = queue_.pop();
+              if (!task) {
+                break;
+              }
+              (*task)();
+            }
+          }} {
+      }
+
+      ~privileged_egl_worker() {
+        queue_.stop();
+      }
+
+      template<class F>
+      auto run(F &&f) -> std::invoke_result_t<F> {
+        using R = std::invoke_result_t<F>;
+        auto task = std::make_shared<std::packaged_task<R()>>(
+          [f = std::forward<F>(f)]() mutable -> R {
+#if !defined(__FreeBSD__)
+            cap_sys_nice nice;
+#endif
+            return f();
+          }
+        );
+        auto fut = task->get_future();
+
+        if (!queue_.raise([task]() mutable {
+              (*task)();
+            })) {
+          throw privileged_egl_worker_stopped {"privileged_egl_worker: task rejected (worker stopping)"};
+        }
+
+        return fut.get();
+      }
+
+      safe::queue_t<std::function<void()>> queue_ {32, safe::queue_t<std::function<void()>>::overflow_policy_e::reject};
+      std::jthread thread_;
+    };
+  }  // namespace
+
+  /**
+   * @brief Allows the EGL privileged worker thread to be constructed early.
+   */
+  void ensure_privileged_egl_worker_started() {
+    privileged_egl_worker::ensure_started();
+  }
+
+  /**
+   * @brief Log EGL failure details and return an error code.
+   */
   bool fail() {
     return eglGetError() != EGL_SUCCESS;
   }
 
-  /**
-   * @memberof egl::display_t
-   */
   display_t make_display(std::variant<gbm::gbm_t::pointer, wl_display *, _XDisplay *> native_display) {
     int egl_platform;
     void *native_display_p;
@@ -391,18 +565,11 @@ namespace egl {
     return display;
   }
 
+  /**
+   * @brief Create an EGL/OpenGL context for capture or conversion.
+   */
   std::optional<ctx_t> make_ctx(display_t::pointer display) {
     bool nice_warning = false;
-#if !defined(__FreeBSD__)
-    cap_t caps = cap_get_proc();
-
-    cap_value_t sys_nice = CAP_SYS_NICE;
-    if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_SET) || cap_set_proc(caps)) {
-      BOOST_LOG(debug) << "Failed to gain CAP_SYS_NICE"sv;
-      nice_warning = true;
-    }
-    cap_free(caps);
-#endif
 
     constexpr int conf_attr[] {
       EGL_RENDERABLE_TYPE,
@@ -436,9 +603,8 @@ namespace egl {
     }
     attr.push_back(EGL_NONE);
 
-    EGLContext raw_ctx = eglCreateContext(display, conf, EGL_NO_CONTEXT, attr.data());
+    EGLContext raw_ctx = egl::privileged_egl_worker::eglCreateContext_privileged(display, conf, EGL_NO_CONTEXT, attr.data(), nice_warning);
     if (raw_ctx == EGL_NO_CONTEXT) {
-      BOOST_LOG(error) << "Couldn't create EGL context: ["sv << util::hex(eglGetError()).to_string_view() << ']';
       return std::nullopt;
     }
 
@@ -492,25 +658,26 @@ namespace egl {
 
     gl::ctx.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-#if !defined(__FreeBSD__)
-    caps = cap_get_proc();
-    if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &sys_nice, CAP_CLEAR) || cap_set_proc(caps)) {
-      BOOST_LOG(debug) << "Failed to drop CAP_SYS_NICE"sv;
-    }
-    cap_free(caps);
-#endif
-
     return ctx;
   }
 
+  /**
+   * @brief EGL attribute pair describing one DMA-BUF plane.
+   */
   struct plane_attr_t {
-    EGLAttrib fd;
-    EGLAttrib offset;
-    EGLAttrib pitch;
-    EGLAttrib lo;
-    EGLAttrib hi;
+    EGLAttrib fd;  ///< EGL attribute key for a plane file descriptor.
+    EGLAttrib offset;  ///< Offset.
+    EGLAttrib pitch;  ///< Pitch.
+    EGLAttrib lo;  ///< Lo.
+    EGLAttrib hi;  ///< Hi.
   };
 
+  /**
+   * @brief Build EGL attributes for one DMA-BUF plane.
+   *
+   * @param plane_indice Zero-based plane index in the DMA-BUF descriptor.
+   * @return EGL attribute keys for that plane's file descriptor, offset, pitch, and modifier.
+   */
   inline plane_attr_t get_plane(std::uint32_t plane_indice) {
     switch (plane_indice) {
       case 0:
@@ -593,6 +760,13 @@ namespace egl {
     return attribs;
   }
 
+  /**
+   * @brief Import the source frame texture for EGL/OpenGL conversion.
+   *
+   * @param egl_display EGL display used to create the image.
+   * @param xrgb XRGB surface descriptor to import.
+   * @return Imported RGB image, or empty when import fails.
+   */
   std::optional<rgb_t> import_source(display_t::pointer egl_display, const surface_descriptor_t &xrgb) {
     auto attribs = surface_descriptor_to_egl_attribs(xrgb);
 
@@ -652,9 +826,14 @@ namespace egl {
   }
 
   // Constants for clear black color Y, U, V. U & V are same so:
-  const float y_black[] = {0.0f, 0.0f, 0.0f, 0.0f};
-  const float uv_black[] = {0.5f, 0.5f, 0.5f, 0.5f};
+  const float y_black[] = {0.0f, 0.0f, 0.0f, 0.0f};  ///< Y black.
+  const float uv_black[] = {0.5f, 0.5f, 0.5f, 0.5f};  ///< Uv black.
 
+  /**
+   * @brief Bind NV12 target framebuffers to their Y and UV plane textures.
+   *
+   * @param nv12 Imported NV12 target whose textures receive rendered output.
+   */
   void nv12_bind_framebuffers(nv12_t &nv12) {
     constexpr std::array<GLenum, 2> attachments {{GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1}};
 
@@ -669,6 +848,11 @@ namespace egl {
     gl_drain_errors;
   }
 
+  /**
+   * @brief Bind YUV444 target framebuffers to their Y, U, and V plane textures.
+   *
+   * @param yuv444 Imported YUV444 target whose textures receive rendered output.
+   */
   void yuv44_bind_framebuffers(yuv444_t &yuv444) {
     constexpr std::array<GLenum, 3> attachments {{GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2}};
 
@@ -683,6 +867,15 @@ namespace egl {
     gl_drain_errors;
   }
 
+  /**
+   * @brief Import the output frame target for EGL/OpenGL conversion.
+   *
+   * @param egl_display EGL display used to create the images.
+   * @param fds File descriptors backing the NV12 image.
+   * @param y Luma plane descriptor.
+   * @param uv Chroma plane descriptor.
+   * @return Imported NV12 image, or empty when import fails.
+   */
   std::optional<nv12_t> import_target(display_t::pointer egl_display, std::array<file_t, nv12_img_t::num_fds> &&fds, const surface_descriptor_t &y, const surface_descriptor_t &uv) {
     auto y_attribs = surface_descriptor_to_egl_attribs(y);
     auto uv_attribs = surface_descriptor_to_egl_attribs(uv);
@@ -719,6 +912,16 @@ namespace egl {
     return nv12;
   }
 
+  /**
+   * @brief Import a YUV444 target image from DMA-BUF descriptors.
+   *
+   * @param egl_display EGL display used to create the images.
+   * @param fds File descriptors backing the YUV444 image.
+   * @param y Luma plane descriptor.
+   * @param u U chroma plane descriptor.
+   * @param v V chroma plane descriptor.
+   * @return Imported YUV444 image, or empty when import fails.
+   */
   std::optional<yuv444_t> import_target_yuv444(
     display_t::pointer egl_display,
     std::array<file_t, yuv444_img_t::num_fds> &&fds,
@@ -775,11 +978,13 @@ namespace egl {
    */
   std::optional<nv12_t> create_nv12_target(int width, int height, AVPixelFormat format) {
     nv12_t nv12 {
-      EGL_NO_DISPLAY,
-      EGL_NO_IMAGE,
-      EGL_NO_IMAGE,
-      gl::tex_t::make(2),
-      gl::frame_buf_t::make(2),
+      nv12_img_t {
+        .display = EGL_NO_DISPLAY,
+        .r8 = EGL_NO_IMAGE,
+        .bg88 = EGL_NO_IMAGE,
+        .tex = gl::tex_t::make(2),
+        .buf = gl::frame_buf_t::make(2),
+      },
     };
 
     GLint y_format;
@@ -811,14 +1016,19 @@ namespace egl {
     return nv12;
   }
 
+  /**
+   * @brief Create YUV444 target.
+   */
   std::optional<yuv444_t> create_yuv444_target(int width, int height, AVPixelFormat format) {
     yuv444_t yuv444 {
-      EGL_NO_DISPLAY,
-      EGL_NO_IMAGE,
-      EGL_NO_IMAGE,
-      EGL_NO_IMAGE,
-      gl::tex_t::make(3),
-      gl::frame_buf_t::make(3),
+      yuv444_img_t {
+        .display = EGL_NO_DISPLAY,
+        .r8 = EGL_NO_IMAGE,
+        .g8 = EGL_NO_IMAGE,
+        .b8 = EGL_NO_IMAGE,
+        .tex = gl::tex_t::make(3),
+        .buf = gl::frame_buf_t::make(3),
+      },
     };
 
     GLint y_format;
@@ -856,7 +1066,7 @@ namespace egl {
     return yuv444;
   }
 
-  void sws_t::apply_colorspace(const video::sunshine_colorspace_t &colorspace) {
+  void sws_t::apply_colorspace(const video::sunshine_colorspace_t &colorspace, bool is_yuv444) {
     auto color_p = video::color_vectors_from_colorspace(colorspace, true);
 
     std::string_view members[] {
@@ -869,11 +1079,22 @@ namespace egl {
 
     color_matrix.update(members, sizeof(members) / sizeof(decltype(members[0])));
 
-    program[0].bind(color_matrix);
-    program[1].bind(color_matrix);
-    program[2].bind(color_matrix);
+    int planesCount = is_yuv444 ? 3 : 2;
+
+    for (int i = 0; i < planesCount; i++) {
+      program[i].bind(color_matrix);
+    }
   }
 
+  /**
+   * @brief Configure the EGL/OpenGL scaling and colorspace conversion pipeline.
+   *
+   * @param sws Software-scaling pipeline to configure.
+   * @param color_p Color p.
+   * @param tex Texture resource used by the converter.
+   * @param is_yuv444 Is YUV444.
+   * @return 0 when shaders, framebuffers, and color uniforms are ready; nonzero on failure.
+   */
   int configure_sws_pipeline(sws_t &sws, const video::color_t *color_p, gl::tex_t &&tex, bool is_yuv444) {
     std::array<std::pair<const char *, std::string_view>, 5> members {{
       std::make_pair("color_vec_y", util::view(color_p->color_vec_y)),
@@ -1308,6 +1529,11 @@ namespace egl {
   }
 }  // namespace egl
 
+/**
+ * @brief Release an FFmpeg frame allocated by the capture or conversion backend.
+ *
+ * @param frame Video or graphics frame being processed.
+ */
 void free_frame(AVFrame *frame) {
   av_frame_free(&frame);
 }

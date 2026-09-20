@@ -2,21 +2,27 @@
  * @file tests/unit/platform/windows/test_utf_utils.cpp
  * @brief Test src/platform/windows/utf_utils.cpp UTF conversion functions.
  */
+
+// test includes
 #include "../../../tests_common.h"
 
+// standard includes
 #include <iostream>
 #include <string>
 
 #ifdef _WIN32
-  #include <src/platform/windows/utf_utils.h>
+  // platform includes
   #include <Windows.h>
+
+  // local includes
+  #include <src/platform/windows/utf_utils.h>
 #endif
 
 #ifdef _WIN32
 /**
  * @brief Test fixture for utf_utils namespace functions
  */
-class UtfUtilsTest: public testing::Test {};
+class UtfUtilsTest: public BaseTest {};
 
 TEST_F(UtfUtilsTest, FromUtf8WithEmptyString) {
   const std::string empty_string = "";

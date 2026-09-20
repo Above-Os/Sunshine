@@ -25,7 +25,23 @@
 #include "wayland.h"
 
 #if !PW_CHECK_VERSION(1, 6, 0)
-constexpr int SPA_VIDEO_TRANSFER_SMPTE2084 = 14;
+constexpr int SPA_VIDEO_TRANSFER_SMPTE2084 = 14;  ///< Protocol or platform constant for spa video transfer smpte2084.
+#endif
+
+#if PW_CHECK_VERSION(0, 3, 75)
+// Runtime linked library version checks are available. Check for pipewire 0.3.64 which documented object serial support and deprecated node id.
+const bool SUNSHINE_USE_PIPEWIRE_OBJECT_SERIAL = pw_check_library_version(0, 3, 64);
+#elifdef PW_KEY_TARGET_OBJECT
+// Runtime linked library version checks are UNAVAILABLE but necessary PW_KEY_TARGET_OBJECT for object serial support is available.
+constexpr bool SUNSHINE_USE_PIPEWIRE_OBJECT_SERIAL = true;
+#else
+// Pipewire object serials are unsupported without PW_KEY_TARGET_OBJECT (we define it here so compilation won't break but don't use it).
+constexpr bool SUNSHINE_USE_PIPEWIRE_OBJECT_SERIAL = false;  ///< Whether PipeWire object serials should be used for matching.
+  /**
+   * @def PW_KEY_TARGET_OBJECT
+   * @brief Macro for PW KEY TARGET OBJECT.
+   */
+  #define PW_KEY_TARGET_OBJECT "target.object"
 #endif
 
 namespace {
@@ -39,9 +55,12 @@ namespace {
 using namespace std::literals;
 
 namespace pipewire {
+  /**
+   * @brief PipeWire SPA format mapped to Sunshine pixel format.
+   */
   struct format_map_t {
-    uint64_t fourcc;
-    int32_t pw_format;
+    uint64_t fourcc;  ///< DRM fourcc pixel format.
+    int32_t pw_format;  ///< Matching PipeWire SPA video format.
   };
 
   static constexpr std::array<format_map_t, 7> format_map = {{
@@ -54,47 +73,77 @@ namespace pipewire {
     {DRM_FORMAT_XRGB8888, SPA_VIDEO_FORMAT_BGRx},
   }};
 
+  /**
+   * @brief PipeWire capture state shared with callback threads.
+   */
   struct shared_state_t {
-    std::atomic<int> negotiated_width {0};
-    std::atomic<int> negotiated_height {0};
-    std::atomic<int> color_primaries {0};
-    std::atomic<int> transfer_function {0};
-    std::atomic<bool> stream_dead {false};
-    pw_stream_state previous_state;
-    pw_stream_state current_state;
-    std::string err_msg;
+    std::atomic<int> negotiated_width {0};  ///< Width negotiated with PipeWire for the stream.
+    std::atomic<int> negotiated_height {0};  ///< Height negotiated with PipeWire for the stream.
+    std::atomic<int> color_primaries {0};  ///< PipeWire color-primaries metadata for the stream.
+    std::atomic<int> transfer_function {0};  ///< PipeWire transfer-function metadata for the stream.
+    std::atomic<bool> stream_dead {false};  ///< Whether the PipeWire stream has been destroyed.
+    pw_stream_state previous_state;  ///< Previous PipeWire stream state reported by callbacks.
+    pw_stream_state current_state;  ///< Current PipeWire stream state reported by callbacks.
+    std::string err_msg;  ///< Last PipeWire error message reported by the stream.
   };
 
+  /**
+   * @brief PipeWire stream handle, format, and shared state pointer.
+   */
   struct stream_data_t {
-    struct pw_stream *stream;
-    struct spa_hook stream_listener;
-    struct spa_video_info format;
-    struct pw_buffer *current_buffer;
-    uint64_t drm_format;
-    std::shared_ptr<shared_state_t> shared;
-    std::mutex frame_mutex;
-    std::condition_variable frame_cv;
-    size_t local_stride = 0;
-    bool frame_ready = false;
+    struct pw_stream *stream;  ///< PipeWire stream handle used for screencast frames.
+    struct spa_hook stream_listener;  ///< Hook registering callbacks on the PipeWire stream.
+    struct spa_video_info format;  ///< Negotiated PipeWire video format.
+    struct pw_buffer *current_buffer;  ///< PipeWire buffer currently exposed to the capture thread.
+    uint64_t drm_format;  ///< DRM format.
+    std::shared_ptr<shared_state_t> shared;  ///< State shared between PipeWire callbacks and the capture backend.
+    std::mutex frame_mutex;  ///< Synchronizes access to the current PipeWire frame.
+    std::condition_variable frame_cv;  ///< Signals arrival or release of a PipeWire frame.
+    size_t local_stride = 0;  ///< Local stride.
+    bool frame_ready = false;  ///< Whether a PipeWire frame is ready to consume.
     // Two distinct memory pools
-    std::vector<uint8_t> buffer_a;
-    std::vector<uint8_t> buffer_b;
+    std::vector<uint8_t> buffer_a;  ///< First staging buffer used for CPU-copy PipeWire frames.
+    std::vector<uint8_t> buffer_b;  ///< Second staging buffer used for CPU-copy PipeWire frames.
     // Points to the buffer currently owned by fill_img
-    std::vector<uint8_t> *front_buffer;
+    std::vector<uint8_t> *front_buffer;  ///< Staging buffer currently readable by `fill_img`.
     // Points to the buffer currently being written by on_process
-    std::vector<uint8_t> *back_buffer;
+    std::vector<uint8_t> *back_buffer;  ///< Staging buffer currently writable by PipeWire callbacks.
 
     stream_data_t():
         front_buffer(&buffer_a),
         back_buffer(&buffer_b) {}
   };
 
+  /**
+   * @brief DMA-BUF format and modifier list advertised by PipeWire.
+   */
   struct dmabuf_format_info_t {
-    int32_t format;
-    uint64_t *modifiers;
-    int n_modifiers;
+    int32_t format;  ///< PipeWire SPA video format being advertised.
+    uint64_t *modifiers;  ///< DRM format modifiers supported for the format.
+    int n_modifiers;  ///< Number of entries in `modifiers`.
   };
 
+  /**
+   * @brief Pipewire image assembled for encoding.
+   */
+  struct img_descriptor_t: public egl::img_descriptor_t {
+    ~img_descriptor_t() override {
+      // Only free buffers this image actually owns. The memory-buffer capture
+      // path points img->data at the PipeWire staging vector (front_buffer),
+      // which is owned by pipewire_t -- deleting it here corrupts the heap.
+      if (data && data_owned) {
+        delete[] data;
+      }
+      data = nullptr;
+      data_owned = false;
+    }
+
+    bool data_owned = false;  ///< Whether img->data is owned by this image and must be freed.
+  };
+
+  /**
+   * @brief PipeWire core, context, and stream setup used for screencast capture.
+   */
   class pipewire_t {
   public:
     pipewire_t():
@@ -105,59 +154,122 @@ namespace pipewire {
 
     ~pipewire_t() {
       BOOST_LOG(debug) << "[pipewire] Destroying pipewire_t"sv;
-      if (loop) {
-        BOOST_LOG(debug) << "[pipewire] Stop PW thread loop"sv;
-        pw_thread_loop_stop(loop);
-      }
-      try {
-        cleanup_stream();
-      } catch (const std::exception &e) {
-        BOOST_LOG(error) << "[pipewire] Standard exception caught in ~pipewire_t: "sv << e.what();
-      } catch (...) {
-        BOOST_LOG(error) << "[pipewire] Unknown exception caught in ~pipewire_t"sv;
-      }
-
       pw_thread_loop_lock(loop);
 
+      // Lock the frame mutex to stop fill_img
+      BOOST_LOG(debug) << "[pipewire] Stop fill_img"sv;
+      {
+        std::scoped_lock lock(stream_data.frame_mutex);
+        stream_data.frame_ready = false;
+        stream_data.current_buffer = nullptr;
+      }
+
+      // Release pipewire stream
+      if (stream_data.stream) {
+        BOOST_LOG(debug) << "[pipewire] Disconnect stream"sv;
+        pw_stream_disconnect(stream_data.stream);
+        BOOST_LOG(debug) << "[pipewire] Destroy stream"sv;
+        pw_stream_destroy(stream_data.stream);
+        stream_data.stream = nullptr;
+      }
+      // Release pipewire core
       if (core) {
         BOOST_LOG(debug) << "[pipewire] Disconnect PW core"sv;
         pw_core_disconnect(core);
         core = nullptr;
       }
+      // Release pipewire context
       if (context) {
         BOOST_LOG(debug) << "[pipewire] Destroy PW context"sv;
         pw_context_destroy(context);
         context = nullptr;
       }
-
-      pw_thread_loop_unlock(loop);
-
+      // Release pipewire file descriptor
       if (fd >= 0) {
         BOOST_LOG(debug) << "[pipewire] Close pipewire_fd"sv;
         close(fd);
       }
+      // Release pipewire thread loop
       BOOST_LOG(debug) << "[pipewire] Stop PW thread loop"sv;
+      pw_thread_loop_unlock(loop);
       pw_thread_loop_stop(loop);
       BOOST_LOG(debug) << "[pipewire] Destroy PW thread loop"sv;
       pw_thread_loop_destroy(loop);
     }
 
+    /**
+     * @brief Return the mutex protecting PipeWire frame state.
+     *
+     * @return Mutex used by producer and capture threads.
+     */
     std::mutex &frame_mutex() {
       return stream_data.frame_mutex;
     }
 
+    /**
+     * @brief Return the condition variable signaled when frame state changes.
+     *
+     * @return Condition variable used to wait for frames or shutdown.
+     */
     std::condition_variable &frame_cv() {
       return stream_data.frame_cv;
     }
 
+    /**
+     * @brief Check whether frame ready.
+     *
+     * @return True when PipeWire has delivered a frame ready for capture.
+     */
     bool is_frame_ready() const {
       return stream_data.frame_ready;
     }
 
+    /**
+     * @brief Check and log whether the active session will require Sunshine to perform pacing.
+     *
+     * @param requested_framerate The framerate that we requested.
+     * @param requested_delay The delay corresponding to the requested framerate.
+     * @return True when Sunshine pacing is required.
+     */
+    bool is_pacing_required(AVRational requested_framerate, std::chrono::nanoseconds requested_delay) {
+      AVRational negotiated_rate =
+        {
+          static_cast<int32_t>(stream_data.format.info.raw.max_framerate.num),
+          static_cast<int32_t>(stream_data.format.info.raw.max_framerate.denom)
+      };
+      int rate_comparison = av_cmp_q(negotiated_rate, requested_framerate);
+      bool variable_rate = negotiated_rate.num == 0 && negotiated_rate.den == 1;
+      bool pacing_required = variable_rate || rate_comparison > 0;
+
+      if (!variable_rate && rate_comparison < 0) {
+        BOOST_LOG(warning)
+          << "[pipewire] Sunshine frame pacing: disabled (negotiated rate lower than requested rate)"sv;
+      } else {
+        BOOST_LOG(info) << "[pipewire] Sunshine frame pacing: "sv
+                        << (pacing_required ? std::format("enabled ({}ms)", std::chrono::duration<double, std::milli>(requested_delay).count()) : "disabled (event-driven capture)");
+      }
+
+      return pacing_required;
+    }
+
+    /**
+     * @brief Set frame ready.
+     *
+     * @param ready Whether the PipeWire frame is ready for capture.
+     */
     void set_frame_ready(bool ready) {
       stream_data.frame_ready = ready;
     }
 
+    /**
+     * @brief Initialize PipeWire core objects and optional stream negotiation.
+     *
+     * @param stream_fd Stream fd.
+     * @param stream_node Stream node.
+     * @param stream_object_serial Stream object serial.
+     * @param shared_state Shared state.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
     int init(const int stream_fd, const uint32_t stream_node, const uint64_t stream_object_serial, std::shared_ptr<shared_state_t> shared_state) {
       fd = stream_fd;
       node = stream_node;
@@ -189,33 +301,21 @@ namespace pipewire {
       return 0;
     }
 
-    void cleanup_stream() {
-      BOOST_LOG(debug) << "[pipewire] Cleaning up stream"sv;
-      if (loop && stream_data.stream) {
-        pw_thread_loop_lock(loop);
-
-        // 1. Lock the frame mutex to stop fill_img
-        BOOST_LOG(debug) << "[pipewire] Stop fill_img"sv;
-        {
-          std::scoped_lock lock(stream_data.frame_mutex);
-          stream_data.frame_ready = false;
-          stream_data.current_buffer = nullptr;
-        }
-
-        if (stream_data.stream) {
-          BOOST_LOG(debug) << "[pipewire] Disconnect stream"sv;
-          pw_stream_disconnect(stream_data.stream);
-          BOOST_LOG(debug) << "[pipewire] Destroy stream"sv;
-          pw_stream_destroy(stream_data.stream);
-          stream_data.stream = nullptr;
-        }
-
-        pw_thread_loop_unlock(loop);
-      }
-    }
-
-    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const uint32_t refresh_rate, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
+    /**
+     * @brief Create the PipeWire stream if it is not already active.
+     *
+     * @param mem_type Mem type.
+     * @param width Frame or display width in pixels.
+     * @param height Frame or display height in pixels.
+     * @param target_framerate Target framerate expressed as AVRational.
+     * @param dmabuf_infos Dmabuf infos.
+     * @param n_dmabuf_infos N dmabuf infos.
+     * @param display_is_nvidia Display is nvidia.
+     * @return 0 when the PipeWire stream is configured; nonzero on negotiation failure.
+     */
+    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const AVRational target_framerate, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
       pw_thread_loop_lock(loop);
+      int result = 0;
       if (!stream_data.stream) {
         if (!core) {
           BOOST_LOG(debug) << "[pipewire] PW core not available. Cannot ensure stream."sv;
@@ -224,14 +324,6 @@ namespace pipewire {
         }
 
         struct pw_properties *props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE, "Screen", nullptr);
-#ifdef PW_KEY_TARGET_OBJECT
-        // If pipewire supports setting a PW_KEY_TARGET_OBJECT via object serial and the serial is valid (lower 32-bits not SPA_ID_INVALID, see PW_KEY_OBJECT_SERIAL docs), use it.
-        if ((object_serial & SPA_ID_INVALID) != SPA_ID_INVALID) {
-          BOOST_LOG(debug) << "[pipewire] Set PW stream target object to serial: "sv << object_serial;
-          pw_properties_setf(props, PW_KEY_TARGET_OBJECT, "%" PRIu64, object_serial);
-          node = PW_ID_ANY;  // Force pw_connect_stream to connect via object serial in PW_KEY_TARGET_OBJECT with this value.
-        }
-#endif
 
         BOOST_LOG(debug) << "[pipewire] Create PW stream"sv;
         stream_data.stream = pw_stream_new(core, "Sunshine Video Capture", props);
@@ -252,7 +344,7 @@ namespace pipewire {
                                                  (mem_type == platf::mem_type_e::cuda && display_is_nvidia));
         if (use_dmabuf) {
           for (int i = 0; i < n_dmabuf_infos; i++) {
-            auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers);
+            auto format_param = build_format_parameter(&pod_builder, width, height, target_framerate, dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers);
             params[n_params] = format_param;
             n_params++;
           }
@@ -260,17 +352,39 @@ namespace pipewire {
 
         // Add fallback for memptr
         for (const auto &fmt : format_map) {
-          auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, fmt.pw_format, nullptr, 0);
+          auto format_param = build_format_parameter(&pod_builder, width, height, target_framerate, fmt.pw_format, nullptr, 0);
           params[n_params] = format_param;
           n_params++;
         }
-        BOOST_LOG(debug) << "[pipewire] Connect PW stream - fd: "sv << fd << " node: "sv << node << " object serial: "sv << object_serial;
-        pw_stream_connect(stream_data.stream, PW_DIRECTION_INPUT, node, (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params.data(), n_params);
+
+        // Connection via pipewire object serial if it is supported and the serial is valid (lower 32-bits != SPA_ID_INVALID, see also PW_KEY_OBJECT_SERIAL docs)
+        if (SUNSHINE_USE_PIPEWIRE_OBJECT_SERIAL && (object_serial & SPA_ID_INVALID) != SPA_ID_INVALID) {
+          pw_properties_setf(props, PW_KEY_TARGET_OBJECT, "%" PRIu64, object_serial);
+          BOOST_LOG(debug) << "[pipewire] Connect PW stream - fd: "sv << fd << " object serial: "sv << object_serial;
+          result = pw_stream_connect(stream_data.stream, PW_DIRECTION_INPUT, PW_ID_ANY, (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params.data(), n_params);
+          if (result < 0) {
+            // Unset object serial for retry with node id
+            pw_properties_set(props, PW_KEY_TARGET_OBJECT, nullptr);
+          }
+        } else {
+          result = -1;  // Mark failed so we try to connect via node id
+        }
+        // Connection via legacy (and deprecated) pipewire node id
+        if (result < 0) {
+          BOOST_LOG(debug) << "[pipewire] Connect PW stream - fd: "sv << fd << " node: "sv << node;
+          result = pw_stream_connect(stream_data.stream, PW_DIRECTION_INPUT, node, (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params.data(), n_params);
+        }
       }
+
       pw_thread_loop_unlock(loop);
-      return 0;
+      return result;
     }
 
+    /**
+     * @brief Close img fds.
+     *
+     * @param img_descriptor Image descriptor whose duplicated DMA-BUF fds are closed.
+     */
     static void close_img_fds(egl::img_descriptor_t *img_descriptor) {
       for (int &fd : img_descriptor->sd.fds) {
         if (fd >= 0) {
@@ -280,6 +394,12 @@ namespace pipewire {
       }
     }
 
+    /**
+     * @brief Copy PipeWire metadata into the Sunshine image descriptor.
+     *
+     * @param img_descriptor Image descriptor receiving timestamps, sequence, and damage flags.
+     * @param buf Raw byte buffer used for serialization.
+     */
     static void fill_img_metadata(egl::img_descriptor_t *img_descriptor, struct spa_buffer *buf) {
       img_descriptor->frame_timestamp = std::chrono::steady_clock::now();
 
@@ -301,6 +421,13 @@ namespace pipewire {
       img_descriptor->pw_damage = (damage && damage->region.size.width > 0 && damage->region.size.height > 0) ? std::optional<bool>(true) : std::nullopt;
     }
 
+    /**
+     * @brief Populate a Sunshine image descriptor from PipeWire DMA-BUF planes.
+     *
+     * @param img_descriptor Image descriptor receiving duplicated fds and plane layout.
+     * @param buf Raw byte buffer used for serialization.
+     * @param d PipeWire listener data passed to the callback.
+     */
     static void fill_img_dmabuf(egl::img_descriptor_t *img_descriptor, struct spa_buffer *buf, const stream_data_t &d) {
       img_descriptor->sd.width = d.format.info.raw.size.width;
       img_descriptor->sd.height = d.format.info.raw.size.height;
@@ -313,6 +440,11 @@ namespace pipewire {
       }
     }
 
+    /**
+     * @brief Copy the latest PipeWire frame into Sunshine's image buffer.
+     *
+     * @param img Image or frame object to read from or populate.
+     */
     void fill_img(platf::img_t *img) {
       pw_thread_loop_lock(loop);
       std::scoped_lock lock(stream_data.frame_mutex);
@@ -332,19 +464,28 @@ namespace pipewire {
 
       struct spa_buffer *buf = stream_data.current_buffer->buffer;
       if (buf->datas[0].chunk->size != 0) {
-        auto *img_descriptor = static_cast<egl::img_descriptor_t *>(img);
+        auto *img_descriptor = static_cast<img_descriptor_t *>(img);
         fill_img_metadata(img_descriptor, buf);
         if (buf->datas[0].type == SPA_DATA_DmaBuf) {
           fill_img_dmabuf(img_descriptor, buf, stream_data);
         } else {
           img->data = stream_data.front_buffer->data();
+          img_descriptor->data_owned = false;
           img->row_pitch = stream_data.local_stride;
+          // NV12 is the only 1-byte-per-pixel format delivered on the memory
+          // path; every other negotiated format is packed 4 bytes per pixel.
+          img->pixel_pitch = (stream_data.format.info.raw.format == SPA_VIDEO_FORMAT_NV12) ? 1 : 4;
         }
       }
 
       pw_thread_loop_unlock(loop);
     }
 
+    /**
+     * @brief Set negotiate maxframerate.
+     *
+     * @param negotiate_maxframerate Negotiate maxframerate.
+     */
     void set_negotiate_maxframerate(bool negotiate_maxframerate) {
       negotiate_maxframerate_ = negotiate_maxframerate;
     }
@@ -360,7 +501,7 @@ namespace pipewire {
     uint64_t object_serial;
     bool negotiate_maxframerate_ = true;
 
-    struct spa_pod *build_format_parameter(struct spa_pod_builder *b, uint32_t width, uint32_t height, uint32_t refresh_rate, int32_t format, uint64_t *modifiers, int n_modifiers) {
+    struct spa_pod *build_format_parameter(struct spa_pod_builder *b, uint32_t width, uint32_t height, AVRational target_framerate, int32_t format, uint64_t *modifiers, int n_modifiers) {
       struct spa_pod_frame object_frame;
       struct spa_pod_frame modifier_frame;
       std::array<struct spa_rectangle, 3> sizes;
@@ -370,18 +511,22 @@ namespace pipewire {
       sizes[1] = SPA_RECTANGLE(1, 1);
       sizes[2] = SPA_RECTANGLE(8192, 4096);
 
-      framerates[0] = SPA_FRACTION(0, 1);  // default; we only want variable rate, thus bypassing compositor pacing
+      framerates[0] = SPA_FRACTION(uint32_t(target_framerate.num), uint32_t(target_framerate.den));  // default/preferred
       framerates[1] = SPA_FRACTION(0, 1);  // min
-      framerates[2] = SPA_FRACTION(0, 1);  // max
+      framerates[2] = SPA_FRACTION(1000, 1);  // max
 
       spa_pod_builder_push_object(b, &object_frame, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
       spa_pod_builder_add(b, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), 0);
       spa_pod_builder_add(b, SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(format), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizes[0], &sizes[1], &sizes[2]), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&framerates[0]), 0);
       if (negotiate_maxframerate_) {
+        // Always request variable rate (0, 1) for framerate when populating maxFramerate with default,min,max values
+        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&framerates[1]), 0);
         spa_pod_builder_add(b, SPA_FORMAT_VIDEO_maxFramerate, SPA_POD_CHOICE_RANGE_Fraction(&framerates[0], &framerates[1], &framerates[2]), 0);
+      } else {
+        // Request target framerate (target_framerate) for framerate in fallback case
+        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&framerates[0]), 0);
       }
 
       if (format == SPA_VIDEO_FORMAT_xBGR_210LE) {
@@ -420,8 +565,13 @@ namespace pipewire {
     };
 
     static void on_stream_state_changed(void *user_data, enum pw_stream_state old, enum pw_stream_state state, const char *err_msg) {
-      BOOST_LOG(debug) << "[pipewire] PipeWire stream state: " << pw_stream_state_as_string(old)
-                       << " -> " << pw_stream_state_as_string(state);
+      if (err_msg != nullptr) {
+        BOOST_LOG(info) << "[pipewire] PipeWire stream error '" << err_msg << "' on state: " << pw_stream_state_as_string(old)
+                        << " -> " << pw_stream_state_as_string(state);
+      } else {
+        BOOST_LOG(info) << "[pipewire] PipeWire stream state: " << pw_stream_state_as_string(old)
+                        << " -> " << pw_stream_state_as_string(state);
+      }
 
       auto *d = static_cast<stream_data_t *>(user_data);
 
@@ -534,10 +684,11 @@ namespace pipewire {
       BOOST_LOG(info) << "[pipewire] Color primaries: "sv << d->format.info.raw.color_primaries;
       BOOST_LOG(info) << "[pipewire] Transfer function: "sv << d->format.info.raw.transfer_function;
       if (d->format.info.raw.max_framerate.num == 0 && d->format.info.raw.max_framerate.denom == 1) {
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor): 0/1 (variable rate capture)";
+        BOOST_LOG(info) << "[pipewire] Compositor negotiated frame rate: 0/1 (variable rate capture)"sv;
       } else {
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor): "sv << d->format.info.raw.framerate.num << "/"sv << d->format.info.raw.framerate.denom;
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor, max): "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
+        BOOST_LOG(info) << "[pipewire] Compositor negotiated frame rate: "sv
+                        << d->format.info.raw.framerate.num << "/"sv << d->format.info.raw.framerate.denom
+                        << ", max: "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
       }
 
       int physical_w = d->format.info.raw.size.width;
@@ -604,8 +755,17 @@ namespace pipewire {
     };
   };
 
+  /**
+   * @brief Display capture backend that consumes frames from a PipeWire stream.
+   */
   class pipewire_display_t: public platf::display_t {
   public:
+    /**
+     * @brief Initialize pipewire and check hwdevice type.
+     *
+     * @param hwdevice_type Hardware device type requested for capture or encode.
+     * @return True when PipeWire is initialized and the hardware device type is supported.
+     */
     static bool init_pipewire_and_check_hwdevice_type(platf::mem_type_e hwdevice_type) {
       // Initialize pipewire to load necessary modules
       pw_init(nullptr, nullptr);
@@ -672,19 +832,38 @@ namespace pipewire {
       }
     }
 
+    /**
+     * @brief Initialize the PipeWire display backend for a selected stream.
+     *
+     * @param hwdevice_type Hardware device type requested for capture or encode.
+     * @param display_name Display name.
+     * @param config Configuration values to apply.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
     int init(platf::mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
       // calculate frame interval we should capture at
-      framerate = config.framerate;
-      if (config.framerateX100 > 0) {
-        AVRational fps_strict = ::video::framerateX100_to_rational(config.framerateX100);
-        delay = std::chrono::nanoseconds(
-          (static_cast<int64_t>(fps_strict.den) * 1'000'000'000LL) / fps_strict.num
-        );
-        BOOST_LOG(info) << "[pipewire] Requested frame rate [" << fps_strict.num << "/" << fps_strict.den << ", approx. " << av_q2d(fps_strict) << " fps]";
+      delay = ::video::capture_frame_interval(config);
+
+      // WORKAROUND: if the active compositor is KWin, request variable rate (0, 1) capture for versions 5.x-6.7.79 (6.7.80+ are 6.8 preview releases).
+      // Issue: KWin <=6.7 has a ~3% fixed-rate pacing deficit vs the requested framerate; variable rate avoids this and prioritizes gaming smoothness.
+      //        KWin 6.7 regresses variable rate (desktop animations run at half speed, but doesn't affect in-game pacing). Ref: https://bugs.kde.org/show_bug.cgi?id=524129
+      // Issue: KWin 6.8 still has desktop animation pacing issues with variable rate, but fixes the 3% fixed-rate pacing deficit. Fixed-rate pacing has
+      //        new regression tied to 'commit-timing'/VK_KHR_present_timing support when Vsync/FIFO is enabled. Ref: https://bugs.kde.org/show_bug.cgi?id=525619
+      // Summary: KWin 5.5-6.6 have excellent (variable) pacing. KWin 6.7 has poor desktop animation pacing (variable) but good game pacing.
+      //          KWin 6.8+ will have good overall (fixed) pacing if #525619 can be resolved, otherwise we will update docs advising to disable VSync in games.
+      // Also negotiate variable rate for all other compositors. Mutter's variable rate pacing is superior.
+      const static std::vector<int> kwin_version = get_running_kwin_version();
+      const static bool negotiate_variable_rate = kwin_version.empty() || (kwin_version[0] == 5 || (kwin_version[0] == 6 && (kwin_version[1] < 7 || (kwin_version[1] == 7 && kwin_version[2] < 80))));
+
+      const AVRational fps = (negotiate_variable_rate ? AVRational {0, 1} : ::video::framerate_to_rational(config));
+      if (fps.den != 1) {
+        BOOST_LOG(info) << "[pipewire] Requested frame rate: "sv << fps.num << "/"sv << fps.den << ", approx. "sv << av_q2d(fps) << " fps"sv;
+      } else if (fps.num == 0 && fps.den == 1) {
+        BOOST_LOG(info) << "[pipewire] Requested variable frame rate (Sunshine pacing required: "sv << std::chrono::duration<double, std::milli>(delay).count() << "ms)"sv;
       } else {
-        delay = std::chrono::nanoseconds {1s} / framerate;
-        BOOST_LOG(info) << "[pipewire] Requested frame rate [" << framerate << "fps]";
+        BOOST_LOG(info) << "[pipewire] Requested frame rate: "sv << fps.num << "fps"sv;
       }
+      this->target_framerate = fps;
       mem_type = hwdevice_type;
 
       if (get_dmabuf_modifiers() < 0) {
@@ -704,8 +883,6 @@ namespace pipewire {
       // Verify or update display parameters for streaming to ensure absolute touch inputs work as expected
       verify_and_update_display_parameters();
 
-      framerate = config.framerate;
-
       if (!shared_state) {
         shared_state = std::make_shared<shared_state_t>();
       } else {
@@ -722,7 +899,7 @@ namespace pipewire {
       }
 
       // Start PipeWire now so format negotiation can proceed before capture start
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, target_framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. pipewire_t::init() failed.";
         return -1;
       }
@@ -759,6 +936,15 @@ namespace pipewire {
       return 0;
     }
 
+    /**
+     * @brief Capture a display frame into the provided image object.
+     *
+     * @param pull_free_image_cb Callback that provides an available image buffer.
+     * @param img_out Captured PipeWire image returned to the streaming pipeline.
+     * @param timeout Maximum time to wait for the operation.
+     * @param show_cursor Show cursor.
+     * @return Capture status reported to the streaming pipeline.
+     */
     platf::capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool show_cursor) {
       // FIXME: show_cursor is ignored
       auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -790,9 +976,14 @@ namespace pipewire {
       return platf::capture_e::timeout;
     }
 
+    /**
+     * @brief Allocate an image buffer compatible with this display backend.
+     *
+     * @return Allocated img object, or null when unavailable.
+     */
     std::shared_ptr<platf::img_t> alloc_img() override {
       // Note: this img_t type is also used for memory buffers
-      auto img = std::make_shared<egl::img_descriptor_t>();
+      auto img = std::make_shared<img_descriptor_t>();
 
       img->width = width;
       img->height = height;
@@ -801,11 +992,18 @@ namespace pipewire {
       img->sequence = 0;
       img->serial = std::numeric_limits<decltype(img->serial)>::max();
       img->data = nullptr;
+      img->data_owned = false;
       std::fill_n(img->sd.fds, 4, -1);
 
       return img;
     }
 
+    /**
+     * @brief Check stream dead.
+     *
+     * @param out_status Out status.
+     * @return True when the PipeWire stream can no longer produce frames.
+     */
     virtual bool check_stream_dead(platf::capture_e &out_status) {
       return false;  // Return to default stream dead handling.
     }
@@ -813,11 +1011,14 @@ namespace pipewire {
     platf::capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
       auto next_frame = std::chrono::steady_clock::now();
 
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, target_framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. capture() failed with error.";
         return platf::capture_e::error;
       }
       sleep_overshoot_logger.reset();
+
+      // Check if pacing is required
+      bool pacing_required = pipewire.is_pacing_required(target_framerate, delay);
 
       while (true) {
         // Check if PipeWire signaled a dead stream
@@ -831,16 +1032,9 @@ namespace pipewire {
           return platf::capture_e::reinit;
         }
 
-        // Advance to (or catch up with) next delay interval
-        auto now = std::chrono::steady_clock::now();
-        while (next_frame < now) {
-          next_frame += delay;
-        }
-
-        if (next_frame > now) {
-          std::this_thread::sleep_until(next_frame);
-          sleep_overshoot_logger.first_point(next_frame);
-          sleep_overshoot_logger.second_point_now_and_log();
+        // Use unpaced event driven capture when possible
+        if (pacing_required) {
+          platf::handle_pacing(next_frame, delay, sleep_overshoot_logger);
         }
 
         std::shared_ptr<platf::img_t> img_out;
@@ -853,18 +1047,18 @@ namespace pipewire {
           case platf::capture_e::timeout:
             if (!pull_free_image_cb(img_out)) {
               // Detect if shutdown is pending
-              BOOST_LOG(debug) << "[pipewire] PipeWire: timeout -> interrupt nudge";
+              BOOST_LOG(debug) << "[pipewire] PipeWire: timeout -> shutdown pending -> interrupt nudge";
               pipewire.frame_cv().notify_all();
               return platf::capture_e::interrupted;
             }
             if (!push_captured_image_cb(std::move(img_out), false)) {
-              BOOST_LOG(debug) << "[pipewire] PipeWire: !push_captured_image_cb -> ok";
+              BOOST_LOG(debug) << "[pipewire] PipeWire: timeout -> !push_captured_image_cb -> ok";
               return platf::capture_e::ok;
             }
             break;
           case platf::capture_e::ok:
             if (!push_captured_image_cb(std::move(img_out), true)) {
-              BOOST_LOG(debug) << "[pipewire] PipeWire: !push_captured_image_cb -> ok";
+              BOOST_LOG(debug) << "[pipewire] PipeWire: ok -> !push_captured_image_cb -> ok";
               return platf::capture_e::ok;
             }
             break;
@@ -877,6 +1071,12 @@ namespace pipewire {
       return platf::capture_e::ok;
     }
 
+    /**
+     * @brief Create AVCodec encode device.
+     *
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return Constructed AVCodec encode device object.
+     */
     std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
       if (mem_type == platf::mem_type_e::vaapi) {
@@ -906,16 +1106,35 @@ namespace pipewire {
       return std::make_unique<platf::avcodec_encode_device_t>();
     }
 
+    /**
+     * @brief Populate a fallback image when real capture data is unavailable.
+     *
+     * @param img Image or frame object to read from or populate.
+     * @return Capture status reported to the streaming pipeline.
+     */
     int dummy_img(platf::img_t *img) override {
-      if (!img) {
-        return -1;
+      // Software encoders convert the dummy image immediately; provide a valid
+      // (black) buffer instead of leaving img->data null, which makes sws fail
+      // with EINVAL. The buffer is new[]-allocated and marked as owned so the
+      // destructor releases it.
+      if (img->data == nullptr) {
+        const auto w = img->width;
+        const auto h = img->height;
+        if (w > 0 && h > 0) {
+          img->data = new uint8_t[static_cast<size_t>(w) * h * 4]();  // NOSONAR(cpp:S5025) - buffer is owned by the image and freed by img_descriptor_t's destructor
+          static_cast<img_descriptor_t *>(img)->data_owned = true;
+          img->row_pitch = w * 4;
+          img->pixel_pitch = 4;
+        }
       }
-
-      img->data = new std::uint8_t[img->height * img->row_pitch];
-      std::fill_n(img->data, img->height * img->row_pitch, 0);
       return 0;
     }
 
+    /**
+     * @brief Report whether the active display mode is HDR.
+     *
+     * @return True when the active display mode is HDR.
+     */
     bool is_hdr() override {
       int color_primaries = shared_state->color_primaries.load();
       int transfer_function = shared_state->transfer_function.load();
@@ -927,6 +1146,12 @@ namespace pipewire {
       return false;
     }
 
+    /**
+     * @brief Read HDR metadata for the active display mode.
+     *
+     * @param metadata Output structure populated with HDR metadata.
+     * @return True when HDR metadata was written to the output structure.
+     */
     bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
       int color_primaries = shared_state->color_primaries.load();
       int transfer_function = shared_state->transfer_function.load();
@@ -955,6 +1180,89 @@ namespace pipewire {
       }
 
       return false;
+    }
+
+    /**
+     * Fetch the currently running KWin version (if available from its DBUS support information method)
+     *
+     * @return A vector with 3 elements containing KWin's major.minor.micro version or an empty vector if KWin's version could not be determined
+     */
+    static std::vector<int> get_running_kwin_version() {
+#if !GLIB_CHECK_VERSION(2, 74, 0)
+      // Compatibility for Ubuntu 22.04 (Glib 2.72)
+      constexpr auto G_REGEX_DEFAULT = static_cast<GRegexCompileFlags>(0);
+      constexpr auto G_REGEX_MATCH_DEFAULT = static_cast<GRegexMatchFlags>(0);
+#endif
+      auto conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+      std::vector<int> result;
+
+      if (!conn) {
+        return result;
+      }
+
+      auto reply = g_dbus_connection_call_sync(
+        conn,
+        "org.kde.KWin",
+        "/KWin",
+        "org.kde.KWin",
+        "supportInformation",
+        nullptr,
+        G_VARIANT_TYPE("(s)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        nullptr,
+        nullptr
+      );
+
+      if (!reply) {
+        g_clear_object(&conn);
+        return result;
+      }
+
+      g_autofree gchar *support_info = nullptr;
+      g_variant_get(reply, "(s)", &support_info);
+
+      if (!support_info) {
+        g_variant_unref(reply);
+        g_clear_object(&conn);
+        return result;
+      }
+
+      auto *regex = g_regex_new(
+        "KWin version: ([0-9]+)\\.([0-9]+)\\.([0-9]+)",
+        G_REGEX_DEFAULT,
+        G_REGEX_MATCH_DEFAULT,
+        nullptr
+      );
+
+      if (!regex) {
+        g_variant_unref(reply);
+        g_clear_object(&conn);
+        return result;
+      }
+
+      GMatchInfo *match_info = nullptr;
+      g_regex_match(regex, support_info, G_REGEX_MATCH_DEFAULT, &match_info);
+
+      if (g_match_info_matches(match_info)) {
+        g_autofree const gchar *major =
+          g_match_info_fetch(match_info, 1);
+        g_autofree const gchar *minor =
+          g_match_info_fetch(match_info, 2);
+        g_autofree const gchar *micro =
+          g_match_info_fetch(match_info, 3);
+
+        result.emplace_back(std::atoi(major));
+        result.emplace_back(std::atoi(minor));
+        result.emplace_back(std::atoi(micro));
+      }
+
+      g_match_info_free(match_info);
+      g_regex_unref(regex);
+      g_variant_unref(reply);
+      g_clear_object(&conn);
+
+      return result;
     }
 
   private:
@@ -1096,11 +1404,11 @@ namespace pipewire {
     std::optional<std::uint64_t> last_pts {};
     std::optional<std::uint64_t> last_seq {};
     std::uint64_t sequence {};
-    uint32_t framerate;
+    AVRational target_framerate;
 
   protected:
     // Allow subclasses to access for pipewire requirements setup and stream dead checks
-    pipewire_t pipewire;
-    std::shared_ptr<shared_state_t> shared_state;
+    pipewire_t pipewire;  ///< Pipewire.
+    std::shared_ptr<shared_state_t> shared_state;  ///< Shared state.
   };
 }  // namespace pipewire

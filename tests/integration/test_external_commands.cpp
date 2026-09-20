@@ -2,6 +2,8 @@
  * @file tests/integration/test_external_commands.cpp
  * @brief Integration tests for running external commands with platform-specific validation
  */
+
+// test includes
 #include "../tests_common.h"
 
 // standard includes
@@ -10,10 +12,8 @@
 #include <tuple>
 #include <vector>
 
-// lib includes
-#include <boost/process/v1.hpp>
-
 // local includes
+#include "src/boost_process_compat.h"
 #include "src/platform/common.h"
 
 // Test data structure for parameterized testing
@@ -37,9 +37,10 @@ struct ExternalCommandTestData {
       xfail_reason(std::move(xfail_rsn)) {}
 };
 
-class ExternalCommandTest: public ::testing::TestWithParam<ExternalCommandTestData> {
+class ExternalCommandTest: public BaseTest, public ::testing::WithParamInterface<ExternalCommandTestData> {
 protected:
   void SetUp() override {
+    BaseTest::SetUp();
     if constexpr (IS_WINDOWS) {
       current_platform = "windows";
     } else if constexpr (IS_MACOS) {

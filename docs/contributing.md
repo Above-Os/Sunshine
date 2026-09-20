@@ -12,9 +12,10 @@ Read our contribution guide in our organization level
 
 ### Web UI
 * The Web UI uses [Vite](https://vitejs.dev) as its build system.
-* The HTML pages used by the Web UI are found in `./src_assets/common/assets/web`.
-* [EJS](https://www.npmjs.com/package/vite-plugin-ejs) is used as a templating system for the pages
-  (check `template_header.html` and `template_header_main.html`).
+* The Web UI is a [Vue Router](https://router.vuejs.org) single-page application. Vite builds one `index.html` entry
+  document, and the route implementations remain split into Vue components in `./src_assets/common/assets/web`.
+* Browser routes use history mode. Sunshine serves the same `index.html` entry document for every Web UI route,
+  while API and static asset routes continue to be handled independently by the configuration server.
 * The Style System is provided by [Bootstrap](https://getbootstrap.com).
 * Icons are provided by [Lucide](https://lucide.dev) and [Simple Icons](https://simpleicons.org).
 * The JS framework used by the more interactive pages is [Vue.js](https://vuejs.org).
@@ -30,6 +31,14 @@ Read our contribution guide in our organization level
     npm run dev
     ```}
 }
+
+#### Testing
+
+Run the Web UI unit tests with:
+
+```bash
+npm test
+```
 
 ### Localization
 Sunshine and related LizardByte projects are being localized into various languages.
@@ -128,25 +137,23 @@ any of the following paths are modified.
 ```
 
 When testing locally, it may be desirable to manually extract, initialize, update, and compile strings. Python and
-uv are required for this, along with the Python dependencies in the `third-party/lizardbyte-common/pyproject.toml`
-file. You can install these with the following command.
+uv are required for this, along with the Python dependencies in the Sunshine `pyproject.toml`. From the repository
+root, install these with the following command.
 
 ```bash
-uv sync --project third-party/lizardbyte-common --locked --only-group locale --no-install-project
+uv sync --locked
 ```
 
 Additionally, [xgettext](https://www.gnu.org/software/gettext) must be installed.
 
 * Extract, initialize, and update
   ```bash
-  uv run --project third-party/lizardbyte-common --locked --no-sync \
-    python third-party/lizardbyte-common/scripts/localize.py --root-dir . --extract --init --update
+  uv run --locked --no-sync lb-localize --root-dir . --extract --init --update
   ```
 
 * Compile
   ```bash
-  uv run --project third-party/lizardbyte-common --locked --no-sync \
-    python third-party/lizardbyte-common/scripts/localize.py --root-dir . --compile
+  uv run --locked --no-sync lb-localize --root-dir . --compile
   ```
 
 > [!IMPORTANT]
@@ -160,10 +167,12 @@ Additionally, [xgettext](https://www.gnu.org/software/gettext) must be installed
 #### Clang Format
 Source code is tested against the `.clang-format` file for linting errors.
 
-To apply clang-format locally (will modify files):
+From the repository root, apply clang-format locally with the installed lizardbyte-common script. This will modify
+files in place.
+
 ```bash
-uv run --project third-party/lizardbyte-common --locked --only-group lint-c \
-  python third-party/lizardbyte-common/scripts/update_clang_format.py
+uv sync --locked
+uv run --locked --no-sync lb-update-clang-format
 ```
 
 #### Unit Testing

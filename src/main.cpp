@@ -3,14 +3,31 @@
  * @brief Definitions for the main entry point for Sunshine.
  */
 // standard includes
+#include <cerrno>
 #include <codecvt>
 #include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
+// platform includes
 #ifdef __APPLE__
   #include <mach-o/dyld.h>
+#endif
+#ifdef __linux__
+  #include "platform/linux/graphics.h"
+
+  #include <sys/auxv.h>
+  #if defined(SUNSHINE_BUILD_DRM)
+    #include "platform/linux/misc.h"
+  #endif
+#endif
+
+// lib includes
+#include <rs.h>
+#ifdef _WIN32
+  #include <libvirtualhid/license.hpp>
 #endif
 
 // local includes
@@ -27,18 +44,30 @@
 #include "upnp.h"
 #include "video.h"
 
-extern "C" {
-#include "rswrapper.h"
-}
+#ifdef __linux__
+  #include "platform/common.h"
+  #include "platform/linux/misc.h"
+#endif
 
 using namespace std::literals;
 
-std::map<int, std::function<void()>> signal_handlers;
+std::map<int, std::function<void()>> signal_handlers;  ///< Signal handlers.
 
+/**
+ * @brief Forward a POSIX signal to the registered Sunshine handler.
+ *
+ * @param sig Native signal number being handled.
+ */
 void on_signal_forwarder(int sig) {
   signal_handlers.at(sig)();
 }
 
+/**
+ * @brief Register the handler invoked for a POSIX signal.
+ *
+ * @param sig Native signal number being handled.
+ * @param fn Signal handler function to install.
+ */
 template<class FN>
 void on_signal(int sig, FN &&fn) {
   signal_handlers.emplace(sig, std::forward<FN>(fn));
@@ -46,6 +75,9 @@ void on_signal(int sig, FN &&fn) {
   std::signal(sig, on_signal_forwarder);
 }
 
+/**
+ * @brief Cmd to func.
+ */
 std::map<std::string_view, std::function<int(const char *name, int argc, char **argv)>> cmd_to_func {
   {"creds"sv, [](const char *name, int argc, char **argv) {
      return args::creds(name, argc, argv);
@@ -64,6 +96,15 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
 };
 
 #ifdef _WIN32
+/**
+ * @brief Handle Windows session-change messages for the monitor window.
+ *
+ * @param hwnd Window handle receiving the Windows control event.
+ * @param uMsg U msg.
+ * @param wParam W param.
+ * @param lParam L param.
+ * @return Process or platform callback exit code.
+ */
 LRESULT CALLBACK SessionMonitorWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
   switch (uMsg) {
     case WM_CLOSE:
@@ -84,6 +125,12 @@ LRESULT CALLBACK SessionMonitorWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
   }
 }
 
+/**
+ * @brief Handle Windows console control events for shutdown.
+ *
+ * @param type Protocol, message, or resource type selector.
+ * @return Process or platform callback exit code.
+ */
 WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
   if (type == CTRL_CLOSE_EVENT) {
     BOOST_LOG(info) << "Console closed handler called";
@@ -94,11 +141,16 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
 #endif
 
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-constexpr bool tray_is_enabled = true;
+constexpr bool tray_is_enabled = true;  ///< Compile-time flag indicating tray support is enabled.
 #else
 constexpr bool tray_is_enabled = false;
 #endif
 
+/**
+ * @brief Run the main event loop until Sunshine is asked to exit.
+ *
+ * @param shutdown_event Shutdown event.
+ */
 void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) {
   bool run_loop = false;
 
@@ -122,7 +174,22 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
   BOOST_LOG(info) << "Main loop has exited"sv;
 }
 
+/**
+ * @brief Run the main application or worker loop.
+ *
+ * @param argc The number of arguments.
+ * @param argv The arguments.
+ * @return Process or platform callback exit code.
+ */
 int main(int argc, char *argv[]) {
+#ifdef __linux__
+  const bool privileged_execution = getauxval(AT_SECURE) != 0 || platf::has_elevated_privileges(true);
+  if (privileged_execution && !platf::sanitize_process_environment()) {
+    std::cerr << "Failed to sanitize the environment for privileged execution: " << std::strerror(errno) << '\n';
+    return 1;
+  }
+#endif
+
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable
   // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.
@@ -139,6 +206,26 @@ int main(int argc, char *argv[]) {
         std::cerr << "Failed to set working directory to executable path: " << ec.message() << '\n';
       }
     }
+  }
+#endif
+#if defined(__linux__)
+  // On Linux, child threads inherit capabilities from the parent at creation time.
+  // We ensure the privileged worker starts while capabilities are still held,
+  // and then immediately strip global privileges from the main thread and future tasks.
+  // Please ensure that these calls remain ordered as early as possible in startup initialization.
+  #if defined(SUNSHINE_BUILD_DRM)
+  platf::kms::ensure_privileged_drm_worker_started();
+  #endif
+  // Check and drop capabilities but use 'false' to retain CAP_SYS_NICE for EGL high priority contexts
+  if (platf::has_elevated_privileges(false)) {
+    platf::drop_elevated_privileges(false);
+  }
+
+  // Next, initialize privileged EGL worker thread
+  egl::ensure_privileged_egl_worker_started();
+  // Finally, check and drop all capabilities via 'true', which includes CAP_SYS_NICE.
+  if (platf::has_elevated_privileges(true)) {
+    platf::drop_elevated_privileges(true);
   }
 #endif
 
@@ -200,6 +287,10 @@ int main(int argc, char *argv[]) {
     return fn->second(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
   }
 
+#ifdef _WIN32
+  config::select_all_gamepad_drivers_if_licensed(lvh::get_license_status().license.licensed());
+#endif
+
   // Adding guard here first as it also performs recovery after crash,
   // otherwise people could theoretically end up without display output.
   // It also should be destroyed before forced shutdown to expedite the cleanup.
@@ -230,7 +321,7 @@ int main(int argc, char *argv[]) {
   std::promise<void> session_monitor_join_thread_promise;
   auto session_monitor_join_thread_future = session_monitor_join_thread_promise.get_future();
 
-  std::thread session_monitor_thread([&]() {
+  std::jthread session_monitor_thread([&]() {
     platf::set_thread_name("session_monitor");
     session_monitor_join_thread_promise.set_value_at_thread_exit();
 
@@ -363,7 +454,7 @@ int main(int argc, char *argv[]) {
   reed_solomon_init();
   auto input_deinit_guard = input::init();
 
-  if (input::probe_gamepads()) {
+  if (config::input.controller && input::probe_gamepads()) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
@@ -397,9 +488,9 @@ int main(int argc, char *argv[]) {
     return lifetime::desired_exit_code;
   }
 
-  std::thread httpThread {nvhttp::start};
-  std::thread configThread {confighttp::start};
-  std::thread rtspThread {rtsp_stream::start};
+  std::jthread httpThread {nvhttp::start};
+  std::jthread configThread {confighttp::start};
+  std::jthread rtspThread {rtsp_stream::start};
 
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
@@ -412,6 +503,8 @@ int main(int argc, char *argv[]) {
   if (tray_is_enabled && config::sunshine.system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
 #ifdef _WIN32
+    system_tray::prepare_tray_virtualhid_license();
+    system_tray::prepare_tray_virtualhid_driver();
     // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,
     // the tray icon would not appear even though Sunshine is running correctly otherwise.
     // Restarting the service would allow the icon to appear normally.

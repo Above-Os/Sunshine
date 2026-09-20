@@ -20,6 +20,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
+#include <libavutil/version.h>
 }
 
 #include "graphics.h"
@@ -49,11 +50,11 @@ namespace vk {
     auto target_major = major(node_stat.st_rdev);
     auto target_minor = minor(node_stat.st_rdev);
 
-    VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.apiVersion = VK_API_VERSION_1_1;
 
     static const std::array<const char *, 1> instance_exts = {VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME};
-    VkInstanceCreateInfo ci = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo = &app;
     ci.enabledExtensionCount = instance_exts.size();
     ci.ppEnabledExtensionNames = instance_exts.data();
@@ -74,8 +75,8 @@ namespace vk {
 
     std::string result;
     for (uint32_t i = 0; i < count; i++) {
-      VkPhysicalDeviceDrmPropertiesEXT drm = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
-      VkPhysicalDeviceProperties2 props2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+      VkPhysicalDeviceDrmPropertiesEXT drm = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+      VkPhysicalDeviceProperties2 props2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
       props2.pNext = &drm;
       vkGetPhysicalDeviceProperties2(devs[i], &props2);
       if (drm.hasRender && drm.renderMajor == (int64_t) target_major && drm.renderMinor == (int64_t) target_minor) {
@@ -106,23 +107,30 @@ namespace vk {
     return -1;
   }
 
+  /**
+   * @brief Vulkan shader constants used by the conversion pass.
+   */
   struct PushConstants {
-    std::array<float, 4> color_vec_y;
-    std::array<float, 4> color_vec_u;
-    std::array<float, 4> color_vec_v;
-    std::array<float, 2> range_y;
-    std::array<float, 2> range_uv;
-    std::array<int32_t, 2> src_offset;
-    std::array<int32_t, 2> src_size;
-    std::array<int32_t, 2> dst_offset;
-    std::array<int32_t, 2> dst_size;
-    std::array<int32_t, 2> dst_full_size;
-    std::array<int32_t, 2> cursor_pos;
-    std::array<int32_t, 2> cursor_size;
-    int32_t y_invert;
+    std::array<float, 4> color_vec_y;  ///< Color vec y.
+    std::array<float, 4> color_vec_u;  ///< Color vec u.
+    std::array<float, 4> color_vec_v;  ///< Color vec v.
+    std::array<float, 2> range_y;  ///< Range y.
+    std::array<float, 2> range_uv;  ///< Range uv.
+    std::array<int32_t, 2> src_offset;  ///< Src offset.
+    std::array<int32_t, 2> src_size;  ///< Src size.
+    std::array<int32_t, 2> dst_offset;  ///< Dst offset.
+    std::array<int32_t, 2> dst_size;  ///< Dst size.
+    std::array<int32_t, 2> dst_full_size;  ///< Dst full size.
+    std::array<int32_t, 2> cursor_pos;  ///< Cursor pos.
+    std::array<int32_t, 2> cursor_size;  ///< Cursor size.
+    int32_t y_invert;  ///< Y invert.
   };
 
 // Helper to check VkResult
+/**
+ * @def VK_CHECK(expr)
+ * @brief Macro for VK CHECK.
+ */
 #define VK_CHECK(expr) \
   do { \
     VkResult _r = (expr); \
@@ -131,6 +139,10 @@ namespace vk {
       return -1; \
     } \
   } while (0)
+/**
+ * @def VK_CHECK_BOOL(expr)
+ * @brief Macro for VK CHECK BOOL.
+ */
 #define VK_CHECK_BOOL(expr) \
   do { \
     VkResult _r = (expr); \
@@ -140,12 +152,24 @@ namespace vk {
     } \
   } while (0)
 
+  /**
+   * @brief Vulkan encode device that keeps converted frames in GPU memory.
+   */
   class vk_vram_t: public platf::avcodec_encode_device_t {
   public:
     ~vk_vram_t() override {
       cleanup_pipeline();
     }
 
+    /**
+     * @brief Initialize Vulkan encode device and conversion resources.
+     *
+     * @param in_width In width.
+     * @param in_height In height.
+     * @param in_offset_x In offset x.
+     * @param in_offset_y In offset y.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
     int init(int in_width, int in_height, int in_offset_x = 0, int in_offset_y = 0) {
       width = in_width;
       height = in_height;
@@ -155,6 +179,12 @@ namespace vk {
       return 0;
     }
 
+    /**
+     * @brief Initialize codec options.
+     *
+     * @param ctx Native context object used by the operation or callback.
+     * @param options Request options or socket options to apply.
+     */
     void init_codec_options(AVCodecContext *ctx, AVDictionary **options) override {
       // When VBR mode is selected (rc_mode=4), don't pin rc_min_rate to the target bitrate.
       // Having rc_min_rate == rc_max_rate == bit_rate in VBR mode prevents the encoder from
@@ -165,6 +195,13 @@ namespace vk {
       }
     }
 
+    /**
+     * @brief Attach frame resources used by the next conversion or encode operation.
+     *
+     * @param new_frame Frame to attach.
+     * @param hw_frames_ctx_buf Hardware frames context buffer.
+     * @return Status from updating frame.
+     */
     int set_frame(AVFrame *new_frame, AVBufferRef *hw_frames_ctx_buf) override {
       this->hwframe.reset(new_frame);
       this->frame = new_frame;
@@ -196,7 +233,19 @@ namespace vk {
         return -1;
       }
 
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 32, 100)
+      // FFmpeg 9.0+ may create its queues with VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR
+      // (when VK_KHR_internally_synchronized_queues is available). The Vulkan spec requires
+      // vkGetDeviceQueue2 to retrieve such queues; plain vkGetDeviceQueue would return an
+      // incompatible queue handle, breaking synchronization with the encoder.
+      VkDeviceQueueInfo2 queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2};
+      queue_info.flags = vk_dev.ctx->queue_flags;
+      queue_info.queueFamilyIndex = vk_dev.compute_qf;
+      queue_info.queueIndex = 0;
+      vkGetDeviceQueue2(vk_dev.dev, &queue_info, &vk_dev.compute_queue);
+#else
       vkGetDeviceQueue(vk_dev.dev, vk_dev.compute_qf, 0, &vk_dev.compute_queue);
+#endif
 
       // Load extension functions
       vk_dev.getMemoryFdProperties = (PFN_vkGetMemoryFdPropertiesKHR)
@@ -212,6 +261,9 @@ namespace vk {
       return 0;
     }
 
+    /**
+     * @brief Apply the configured colorspace metadata to the active frame.
+     */
     void apply_colorspace() override {
       auto *colors = video::color_vectors_from_colorspace(colorspace, true);
       if (colors) {
@@ -223,6 +275,11 @@ namespace vk {
       }
     }
 
+    /**
+     * @brief Configure FFmpeg Vulkan hardware frames for video encode input.
+     *
+     * @param frames FFmpeg hardware frames context to initialize.
+     */
     void init_hwframes(AVHWFramesContext *frames) override {
       frames->initial_pool_size = 4;
       auto *vk_frames = (AVVulkanFramesContext *) frames->hwctx;
@@ -233,6 +290,12 @@ namespace vk {
                                                  VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
     }
 
+    /**
+     * @brief Convert a captured frame into a Vulkan hardware frame.
+     *
+     * @param img Image or frame object to read from or populate.
+     * @return Conversion status.
+     */
     int convert(platf::img_t &img) override {
       auto &descriptor = (egl::img_descriptor_t &) img;
 
@@ -328,7 +391,7 @@ namespace vk {
   private:
     bool create_compute_pipeline() {
       // Shader module
-      VkShaderModuleCreateInfo shader_ci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+      VkShaderModuleCreateInfo shader_ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
       shader_ci.codeSize = rgb2yuv_comp_spv_size;
       shader_ci.pCode = rgb2yuv_comp_spv_data.data();
       VK_CHECK_BOOL(vkCreateShaderModule(vk_dev.dev, &shader_ci, nullptr, &compute.shader_module));
@@ -340,7 +403,7 @@ namespace vk {
       bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
       bindings[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-      VkDescriptorSetLayoutCreateInfo ds_layout_ci = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+      VkDescriptorSetLayoutCreateInfo ds_layout_ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
       ds_layout_ci.bindingCount = bindings.size();
       ds_layout_ci.pBindings = bindings.data();
       VK_CHECK_BOOL(vkCreateDescriptorSetLayout(vk_dev.dev, &ds_layout_ci, nullptr, &compute.ds_layout));
@@ -348,7 +411,7 @@ namespace vk {
       // Push constant range
       VkPushConstantRange pc_range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants)};
 
-      VkPipelineLayoutCreateInfo pl_ci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      VkPipelineLayoutCreateInfo pl_ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
       pl_ci.setLayoutCount = 1;
       pl_ci.pSetLayouts = &compute.ds_layout;
       pl_ci.pushConstantRangeCount = 1;
@@ -356,8 +419,8 @@ namespace vk {
       VK_CHECK_BOOL(vkCreatePipelineLayout(vk_dev.dev, &pl_ci, nullptr, &compute.pipeline_layout));
 
       // Compute pipeline
-      VkComputePipelineCreateInfo comp_ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-      comp_ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+      VkComputePipelineCreateInfo comp_ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+      comp_ci.stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
       comp_ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
       comp_ci.stage.module = compute.shader_module;
       comp_ci.stage.pName = "main";
@@ -369,20 +432,20 @@ namespace vk {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
       }};
-      VkDescriptorPoolCreateInfo pool_ci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+      VkDescriptorPoolCreateInfo pool_ci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
       pool_ci.maxSets = 1;
       pool_ci.poolSizeCount = pool_sizes.size();
       pool_ci.pPoolSizes = pool_sizes.data();
       VK_CHECK_BOOL(vkCreateDescriptorPool(vk_dev.dev, &pool_ci, nullptr, &compute.desc_pool));
 
-      VkDescriptorSetAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
       alloc_info.descriptorPool = compute.desc_pool;
       alloc_info.descriptorSetCount = 1;
       alloc_info.pSetLayouts = &compute.ds_layout;
       VK_CHECK_BOOL(vkAllocateDescriptorSets(vk_dev.dev, &alloc_info, &compute.desc_set));
 
       // Sampler for source image
-      VkSamplerCreateInfo sampler_ci = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+      VkSamplerCreateInfo sampler_ci = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
       sampler_ci.magFilter = VK_FILTER_LINEAR;
       sampler_ci.minFilter = VK_FILTER_LINEAR;
       sampler_ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -397,12 +460,12 @@ namespace vk {
     }
 
     bool create_command_resources() {
-      VkCommandPoolCreateInfo pool_ci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+      VkCommandPoolCreateInfo pool_ci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
       pool_ci.queueFamilyIndex = vk_dev.compute_qf;
       pool_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
       VK_CHECK_BOOL(vkCreateCommandPool(vk_dev.dev, &pool_ci, nullptr, &cmd.pool));
 
-      VkCommandBufferAllocateInfo alloc_ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      VkCommandBufferAllocateInfo alloc_ci = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
       alloc_ci.commandPool = cmd.pool;
       alloc_ci.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
       alloc_ci.commandBufferCount = CMD_RING_SIZE;
@@ -466,8 +529,8 @@ namespace vk {
      * @return Expected plane count, or 0 if unknown.
      */
     int query_modifier_plane_count(VkFormat format, uint64_t modifier) {
-      VkDrmFormatModifierPropertiesListEXT mod_list = {VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
-      VkFormatProperties2 fmt_props2 = {VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+      VkDrmFormatModifierPropertiesListEXT mod_list = {.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
+      VkFormatProperties2 fmt_props2 = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
       fmt_props2.pNext = &mod_list;
       vkGetPhysicalDeviceFormatProperties2(vk_dev.phys_dev, format, &fmt_props2);
       std::vector<VkDrmFormatModifierPropertiesEXT> mod_props(mod_list.drmFormatModifierCount);
@@ -490,18 +553,18 @@ namespace vk {
       }
 
       // Query memory requirements for this DMA-BUF
-      VkMemoryFdPropertiesKHR fd_props = {VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+      VkMemoryFdPropertiesKHR fd_props = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
       if (vk_dev.getMemoryFdProperties) {
         vk_dev.getMemoryFdProperties(vk_dev.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fd_props);
       }
 
       // Create VkImage for the DMA-BUF
-      VkExternalMemoryImageCreateInfo ext_ci = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+      VkExternalMemoryImageCreateInfo ext_ci = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
       ext_ci.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
 
       std::array<VkSubresourceLayout, 4> drm_layouts = {};
       VkImageDrmFormatModifierExplicitCreateInfoEXT drm_ci = {
-        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
       };
       VkImageTiling tiling;
 
@@ -531,7 +594,7 @@ namespace vk {
         tiling = VK_IMAGE_TILING_LINEAR;
       }
 
-      VkImageCreateInfo img_ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      VkImageCreateInfo img_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
       img_ci.pNext = &ext_ci;
       img_ci.imageType = VK_IMAGE_TYPE_2D;
       img_ci.format = vk_format;
@@ -556,11 +619,11 @@ namespace vk {
       VkMemoryRequirements mem_req;
       vkGetImageMemoryRequirements(vk_dev.dev, src.image, &mem_req);
 
-      VkImportMemoryFdInfoKHR import_fd = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+      VkImportMemoryFdInfoKHR import_fd = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
       import_fd.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
       import_fd.fd = fd;  // Vulkan takes ownership
 
-      VkMemoryAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+      VkMemoryAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
       alloc_info.pNext = &import_fd;
       alloc_info.allocationSize = mem_req.size;
       alloc_info.memoryTypeIndex = find_memory_type(
@@ -580,7 +643,7 @@ namespace vk {
       vkBindImageMemory(vk_dev.dev, src.image, src_mem, 0);
 
       // Create image view
-      VkImageViewCreateInfo view_ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      VkImageViewCreateInfo view_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
       view_ci.image = src.image;
       view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
       view_ci.format = vk_format;
@@ -595,7 +658,7 @@ namespace vk {
     bool create_cursor_image(int w, int h, const uint8_t *pixels) {
       destroy_cursor_image();
 
-      VkImageCreateInfo img_ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      VkImageCreateInfo img_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
       img_ci.imageType = VK_IMAGE_TYPE_2D;
       img_ci.format = VK_FORMAT_B8G8R8A8_UNORM;
       img_ci.extent = {(uint32_t) w, (uint32_t) h, 1};
@@ -609,7 +672,7 @@ namespace vk {
 
       VkMemoryRequirements mem_req;
       vkGetImageMemoryRequirements(vk_dev.dev, cursor.image, &mem_req);
-      VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+      VkMemoryAllocateInfo alloc = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
       alloc.allocationSize = mem_req.size;
       alloc.memoryTypeIndex = find_memory_type(mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
       VK_CHECK_BOOL(vkAllocateMemory(vk_dev.dev, &alloc, nullptr, &cursor.mem));
@@ -627,7 +690,7 @@ namespace vk {
         vkUnmapMemory(vk_dev.dev, cursor.mem);
       }
 
-      VkImageViewCreateInfo view_ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      VkImageViewCreateInfo view_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
       view_ci.image = cursor.image;
       view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
       view_ci.format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -671,7 +734,7 @@ namespace vk {
 
       if (num_imgs == 1) {
         // Single multiplane image — create plane views
-        VkImageViewCreateInfo view_ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkImageViewCreateInfo view_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view_ci.image = vk_frame->img[0];
         view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
 
@@ -686,7 +749,7 @@ namespace vk {
         VK_CHECK_BOOL(vkCreateImageView(vk_dev.dev, &view_ci, nullptr, &target.uv_view));
       } else {
         // Separate images per plane
-        VkImageViewCreateInfo view_ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkImageViewCreateInfo view_ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         view_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
@@ -729,12 +792,12 @@ namespace vk {
       auto cmd_buf = cmd.ring[cmd.ring_idx];
       cmd.ring_idx = (cmd.ring_idx + 1) % CMD_RING_SIZE;
 
-      VkCommandBufferBeginInfo begin_ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      VkCommandBufferBeginInfo begin_ci = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       begin_ci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VK_CHECK(vkBeginCommandBuffer(cmd_buf, &begin_ci));
 
       // Transition source image to SHADER_READ_ONLY
-      VkImageMemoryBarrier src_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      VkImageMemoryBarrier src_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
       src_barrier.srcAccessMask = 0;
       src_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
       src_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -748,7 +811,7 @@ namespace vk {
 
       // Transition cursor image if needed
       if (cursor.needs_transition) {
-        VkImageMemoryBarrier cursor_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        VkImageMemoryBarrier cursor_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         cursor_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
         cursor_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         cursor_barrier.oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
@@ -765,7 +828,7 @@ namespace vk {
       std::array<VkImageMemoryBarrier, 2> dst_barriers = {};
       int num_dst_barriers = (num_imgs == 1) ? 1 : 2;
       for (int i = 0; i < num_dst_barriers; i++) {
-        dst_barriers[i] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        dst_barriers[i] = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         dst_barriers[i].srcAccessMask = target.initialized ? VK_ACCESS_SHADER_READ_BIT : 0;
         dst_barriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         dst_barriers[i].oldLayout = target.initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
@@ -790,7 +853,7 @@ namespace vk {
       VK_CHECK(vkEndCommandBuffer(cmd_buf));
 
       // Submit with timeline semaphore signaling for FFmpeg
-      VkTimelineSemaphoreSubmitInfo timeline_info = {VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+      VkTimelineSemaphoreSubmitInfo timeline_info = {.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
       std::array<VkSemaphore, AV_NUM_DATA_POINTERS> wait_sems = {};
       std::array<VkSemaphore, AV_NUM_DATA_POINTERS> signal_sems = {};
       std::array<uint64_t, AV_NUM_DATA_POINTERS> wait_vals = {};
@@ -814,7 +877,7 @@ namespace vk {
       timeline_info.signalSemaphoreValueCount = sem_count;
       timeline_info.pSignalSemaphoreValues = signal_vals.data();
 
-      VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+      VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
       submit.pNext = &timeline_info;
       submit.waitSemaphoreCount = sem_count;
       submit.pWaitSemaphores = wait_sems.data();

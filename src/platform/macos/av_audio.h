@@ -17,6 +17,9 @@
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CoreAudio.h>
 
+// standard includes
+#include <functional>
+
 // lib includes
 #include "third-party/TPCircularBuffer/TPCircularBuffer.h"
 
@@ -27,7 +30,50 @@ NS_ASSUME_NONNULL_BEGIN
 @class CATapDescription;
 
 namespace platf {
+  using microphone_permission_callback_t = std::function<void(bool)>;  ///< Completion callback for a microphone permission request.
+  using microphone_permission_request_t = std::function<void(microphone_permission_callback_t)>;  ///< Function that starts a microphone permission request.
+
+  /**
+   * @brief Resolve microphone access from an AVFoundation authorization state.
+   *
+   * @param authorization_status Current authorization state for audio capture.
+   * @param request_access Function used to request access when authorization has not been determined.
+   * @return `true` when microphone access is authorized.
+   */
+  bool request_microphone_permission(AVAuthorizationStatus authorization_status, const microphone_permission_request_t &request_access);
+
+  /**
+   * @brief Ensure Sunshine has permission to capture microphone audio.
+   *
+   * Requests access and waits for the user's response when authorization has not yet been determined.
+   *
+   * @return `true` when microphone access is authorized.
+   */
+  bool request_microphone_permission();
+
+  /**
+   * @brief Provide captured PCM frames to AudioConverter.
+   *
+   * @param inAudioConverter In audio converter.
+   * @param ioNumberDataPackets Requested and returned packet count.
+   * @param ioData Buffer list filled with input audio.
+   * @param outDataPacketDescription Optional packet description output.
+   * @param inUserData AudioConverterInputData state used by the callback.
+   * @return Core Audio status code from the callback.
+   */
   OSStatus audioConverterComplexInputProc(AudioConverterRef _Nullable inAudioConverter, UInt32 *_Nonnull ioNumberDataPackets, AudioBufferList *_Nonnull ioData, AudioStreamPacketDescription *_Nullable *_Nullable outDataPacketDescription, void *_Nonnull inUserData);
+  /**
+   * @brief Receive system-audio tap samples from Core Audio.
+   *
+   * @param inDevice In device.
+   * @param inNow In now.
+   * @param inInputData In input data.
+   * @param inInputTime In input time.
+   * @param outOutputData Out output data.
+   * @param inOutputTime In output time.
+   * @param inClientData In client data.
+   * @return Core Audio status code from the IO callback.
+   */
   OSStatus systemAudioIOProc(AudioObjectID inDevice, const AudioTimeStamp *_Nullable inNow, const AudioBufferList *_Nullable inInputData, const AudioTimeStamp *_Nullable inInputTime, AudioBufferList *_Nullable outOutputData, const AudioTimeStamp *_Nullable inOutputTime, void *_Nullable inClientData);
 }  // namespace platf
 
