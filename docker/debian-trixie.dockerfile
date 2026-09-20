@@ -86,10 +86,10 @@ ARG TAG
 ARG TARGETARCH
 
 # artifacts to be extracted in CI
-COPY --link --from=sunshine-build /build/sunshine/build/cpack_artifacts/Sunshine.deb /artifacts/sunshine-${BASE}-${TAG}-${TARGETARCH}.deb
+COPY --link --from=sunshine-build /build/sunshine/build/cpack_artifacts/*.deb /artifacts/
 
 # copy deb from builder
-COPY --link --from=sunshine-build /build/sunshine/build/cpack_artifacts/Sunshine.deb /sunshine.deb
+COPY --link --from=sunshine-build /build/sunshine/build/cpack_artifacts/*.deb /sunshine.deb
 
 # install sunshine
 RUN <<_INSTALL_SUNSHINE
@@ -99,6 +99,9 @@ apt-get update -y
 apt-get install -y --no-install-recommends /sunshine.deb
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+# systemd 261 creates this mode-000 runtime directory, which prevents BuildKit's
+# local exporter from copying Ubuntu 26.10 arm64 images.
+rm -rf /run/systemd/dissect-root
 _INSTALL_SUNSHINE
 
 # network setup
@@ -107,9 +110,9 @@ EXPOSE 48010
 EXPOSE 47998-48000/udp
 
 # setup user
-ARG PGID=1000
+ARG PGID=1001
 ENV PGID=${PGID}
-ARG PUID=1000
+ARG PUID=1001
 ENV PUID=${PUID}
 ENV TZ="UTC"
 ARG UNAME=lizard
@@ -122,10 +125,10 @@ RUN <<_SETUP_USER
 #!/bin/bash
 set -e
 groupadd -f -g "${PGID}" "${UNAME}"
-useradd -lm -d ${HOME} -s /bin/bash -g "${PGID}" -u "${PUID}" "${UNAME}"
-mkdir -p ${HOME}/.config/sunshine
-ln -s ${HOME}/.config/sunshine /config
-chown -R ${UNAME} ${HOME}
+useradd -lm -d "${HOME}" -s /bin/bash -g "${PGID}" -u "${PUID}" "${UNAME}"
+mkdir -p "${HOME}/.config/sunshine"
+ln -s "${HOME}/.config/sunshine" /config
+chown -R "${UNAME}" "${HOME}"
 _SETUP_USER
 
 USER ${UNAME}
