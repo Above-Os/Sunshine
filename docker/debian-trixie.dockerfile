@@ -11,9 +11,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 FROM sunshine-base AS sunshine-deps
 
+ARG CUDA_PATCHES=true
+ARG UBUNTU_TEST_REPO=false
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Copy only the build script and necessary files first for better layer caching
+# Copy only the build script and conditional patches first for better layer caching
 WORKDIR /build/sunshine/
 COPY --link scripts/linux_build.sh ./scripts/linux_build.sh
 COPY --link packaging/linux/patches/ ./packaging/linux/patches/
@@ -23,9 +26,18 @@ RUN <<_DEPS
 #!/bin/bash
 set -e
 chmod +x ./scripts/linux_build.sh
+
+dependency_options=()
+if [[ "${CUDA_PATCHES}" == "true" ]]; then
+  dependency_options+=(--cuda-patches)
+fi
+if [[ "${UBUNTU_TEST_REPO}" == "true" ]]; then
+  dependency_options+=(--ubuntu-test-repo)
+fi
+
 ./scripts/linux_build.sh \
   --step=deps \
-  --cuda-patches \
+  "${dependency_options[@]}" \
   --sudo-off
 apt-get clean
 rm -rf /var/lib/apt/lists/*
@@ -33,14 +45,17 @@ _DEPS
 
 FROM sunshine-deps AS sunshine-build
 
+ARG BASE
 ARG BRANCH
 ARG BUILD_VERSION
 ARG COMMIT
+ARG TAG
 # note: BUILD_VERSION may be blank
 
 ENV BRANCH=${BRANCH}
 ENV BUILD_VERSION=${BUILD_VERSION}
 ENV COMMIT=${COMMIT}
+ENV DEBIAN_PACKAGE_RELEASE=1+${BASE}${TAG}
 
 # Now copy the full repository
 COPY --link .. .
@@ -67,6 +82,17 @@ set -e
 ./scripts/linux_build.sh \
   --step=package \
   --sudo-off
+
+package_dependencies="$(dpkg-deb --field build/cpack_artifacts/*.deb Depends)"
+package_dependencies_valid=false
+case "${package_dependencies}" in
+  *libqt5*) ;;
+  *libqt6widgets6*libqt6svg6* | *libqt6svg6*libqt6widgets6*) package_dependencies_valid=true ;;
+esac
+if [ "${package_dependencies_valid}" = false ]; then
+  echo "Unexpected Qt package dependencies: ${package_dependencies}"
+  exit 1
+fi
 _BUILD
 
 # run tests
@@ -75,7 +101,7 @@ RUN <<_TEST
 #!/bin/bash
 set -e
 export DISPLAY=:1
-Xvfb ${DISPLAY} -screen 0 1024x768x24 &
+Xvfb "${DISPLAY}" -screen 0 1024x768x24 &
 ./test_sunshine --gtest_color=yes
 _TEST
 
