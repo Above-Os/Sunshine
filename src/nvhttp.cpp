@@ -1266,6 +1266,7 @@ namespace nvhttp {
 
     if (!config::nvhttp.external_ip.empty()) {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
+      tree.put("root.LocalIP", config::nvhttp.external_ip);
     }
 
     auto current_appid = proc::proc.running();
