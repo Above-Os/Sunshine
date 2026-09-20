@@ -118,6 +118,27 @@ cover-img:
                             </p>
                         </div>
                     </div>
+                    {% if client.downloads %}
+                    <div class="card-footer p-3 px-4">
+                        {% for download in client.downloads %}
+                        <div class="{% unless forloop.last %}pb-3{% endunless %}">
+                            {% if download.img_src %}
+                            <a href="{{ download.url }}" target="_blank"{% if download.btn_class %} class="{{ download.btn_class }}"{% endif %}>
+                                <img alt="{{ download.label }}"
+                                     src="{{ download.img_src }}"
+                                     height="{{ download.img_height }}"
+                                     {% if download.img_style %}style="{{ download.img_style }}"{% endif %}/>
+                            </a>
+                            {% else %}
+                            <a href="{{ download.url }}" target="_blank" class="{{ download.btn_class | default: 'btn btn-info' }}">
+                                {% if download.icon_fa %}<i class="{{ download.icon_fa }}"></i>{% endif %}
+                                {{ download.label }}
+                            </a>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="card-footer p-3 px-4">
                     <a class="latest-button btn btn-outline-theme me-3 mb-3 d-none" href="https://github.com/LizardByte/Sunshine/releases/latest" target="_blank">

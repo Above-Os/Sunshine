@@ -1972,6 +1972,25 @@ namespace confighttp {
     std::string backend_name;
     std::string runtime_error_message;
 
+    return entries;
+  }
+
+  /**
+   * @brief Browse the server filesystem.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @note On Windows, an empty or root path returns the list of available drive letters.
+   * @note On non-Windows, an empty path defaults to the filesystem root ("/").
+   *
+   * @api_examples{/api/browse?path=/home/user&type=directory| GET| null}
+   */
+  void browseDirectory(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
     try {
       const auto runtime = platf::virtualhid::create_runtime();
       if (runtime) {
@@ -2040,7 +2059,8 @@ namespace confighttp {
       return;
     }
 
-    print_req(request);
+    const auto port_https = net::map_port(PORT_HTTPS);
+    const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
 
     nlohmann::json output_tree;
     output_tree["virtualhid"] = get_virtualhid_driver_status();

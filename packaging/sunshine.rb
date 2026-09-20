@@ -167,6 +167,7 @@ class Sunshine < Formula
   def base_cmake_args
     args = %W[
       -DBUILD_WERROR=ON
+      -DCMAKE_CXX_STANDARD=23
       -DCMAKE_INSTALL_PREFIX=#{prefix}
       -DGLAD_SKIP_PIP_INSTALL=ON
       -DHOMEBREW_ALLOW_FETCHCONTENT=ON
@@ -285,6 +286,7 @@ class Sunshine < Formula
     else
       system bin/TEST_BINARY, "--gtest_color=yes", "--gtest_output=xml:#{test_results}"
     end
+  end
 
     ensure_artifact_exists test_results
   end
@@ -487,6 +489,55 @@ class Sunshine < Formula
         end
       end
     end
+    ENV.append "CXXFLAGS", "-I#{Formula["icu4c"].opt_include}"
+    icu4c_lib_path = Formula["icu4c"].opt_lib.to_s
+    ENV.append "LDFLAGS", "-L#{icu4c_lib_path}"
+    ENV["LIBRARY_PATH"] = icu4c_lib_path
+    ohai "Linking against ICU libraries at: #{icu4c_lib_path}"
+  end
+
+  def add_cuda_args(args)
+    return unless OS.linux?
+
+    if build.with?(CUDA_FORMULA)
+      configure_cuda(args)
+    else
+      args << "-DSUNSHINE_ENABLE_CUDA=OFF"
+      ohai "CUDA disabled"
+    end
+  end
+
+  def configure_cuda(args)
+    cuda_path = Formula["lizardbyte/homebrew/#{CUDA_FORMULA}"]
+    nvcc_path = "#{cuda_path.opt_bin}/nvcc"
+    gcc_path = Formula[GCC_FORMULA]
+
+    args << "-DSUNSHINE_ENABLE_CUDA=ON"
+    args << "-DCMAKE_CUDA_COMPILER:PATH=#{nvcc_path}"
+    args << "-DCMAKE_CUDA_HOST_COMPILER=#{gcc_path.opt_bin}/gcc-#{GCC_VERSION}"
+    ohai "CUDA enabled with nvcc at: #{nvcc_path}"
+  end
+
+  def build_cmake_args
+    args = base_cmake_args
+    add_test_args(args)
+    add_docs_args(args)
+    add_boost_args(args)
+    add_cuda_args(args)
+    args
+  end
+
+  def build_and_install_project
+    system "cmake", "-S", ".", "-B", "build", "-G", "Unix Makefiles",
+            *std_cmake_args,
+            *build_cmake_args
+
+    system "make", "-C", "build"
+    system "make", "-C", "build", "install"
+  end
+
+  def install_platform_specific_files
+    bin.install "build/tests/test_sunshine" if IS_UPSTREAM_REPO
 
     # codesign the binary on intel macs
     system "codesign", "-s", "-", "--force", "--deep", bin/"sunshine" if OS.mac? && Hardware::CPU.intel?

@@ -73,6 +73,9 @@ function remove() {
   # remove uhid module loading config
   sudo rm -f /etc/modules-load.d/60-sunshine.conf
 
+  # remove uhid module loading config
+  sudo rm -f /etc/modules-load.d/60-sunshine.conf
+
   # remove service
   sudo rm -f ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
 }

@@ -13,6 +13,7 @@
 
 // local includes
 #include <src/logging.h>
+#include <string>
 
 namespace log_checker {
 

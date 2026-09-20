@@ -62,6 +62,45 @@ if(UNIX AND NOT APPLE AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+# Find the correct libgcov library path matching the gcc compiler version
+# This ensures the test executable links against the same libgcov version used during compilation
+if(UNIX AND NOT APPLE)
+    # Get the gcc compiler version
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} -dumpversion
+        OUTPUT_VARIABLE GCC_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    # Extract major version
+    string(REGEX MATCH "^[0-9]+" GCC_MAJOR_VERSION "${GCC_VERSION}")
+
+    # Search for the gcc library directory matching this version
+    file(GLOB GCC_LIB_DIRS "/usr/lib/gcc/*/*${GCC_MAJOR_VERSION}.*")
+
+    if(GCC_LIB_DIRS)
+        list(GET GCC_LIB_DIRS 0 GCC_LIB_DIR)
+        message(STATUS "Found GCC library directory: ${GCC_LIB_DIR}")
+
+        # Look for libgcov.a in the gcc library directory
+        find_library(LIBGCOV_LIBRARY
+            NAMES gcov
+            PATHS ${GCC_LIB_DIR}
+            NO_DEFAULT_PATH
+        )
+
+        if(LIBGCOV_LIBRARY)
+            message(STATUS "Found libgcov: ${LIBGCOV_LIBRARY}")
+            # Store this to link against later
+            set(GCOV_LINK_LIBRARY ${LIBGCOV_LIBRARY})
+        else()
+            message(WARNING "Could not find libgcov in ${GCC_LIB_DIR}")
+        endif()
+    else()
+        message(WARNING "Could not find GCC library directory for version ${GCC_VERSION}")
+    endif()
+endif()
+
 # if windows
 if (WIN32)
     # For Windows: Prevent overriding the parent project's compiler/linker settings
